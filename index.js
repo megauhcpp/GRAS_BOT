@@ -103,7 +103,7 @@ client.on('interactionCreate', async (interaction) => {
         .setTitle('Actualización de tarea')
         .setDescription(`**${user.username}** ha actualizado el estado de la tarea: "${cleanTask}"`)
         .addFields(
-            { name: 'Estado', value: `✅ ${status}` },
+            { name: 'Estado', value: `${status === 'Completada' ? '✅' : '❌'} ${status}` },
             { name: 'Fecha y hora', value: `🕓 ${formattedDate}` }
         )
         .setFooter({ text: '¡Gracias por actualizar las tareas!' });
