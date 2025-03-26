@@ -18,6 +18,9 @@
   },
   "homepage": "https://github.com/megauhcpp/GRAS_BOT#readme",
   "dependencies": {
-    "discord.js": "^14.18.0"
+    "axios": "^1.8.4",
+    "compromise": "^14.14.4",
+    "discord.js": "^14.18.0",
+    "dotenv": "^16.4.7"
   }
 }
