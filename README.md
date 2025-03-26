@@ -1,4 +1,4 @@
-```markdown
+
 # GRAS BOT
 
 Este bot de Discord está diseñado para ayudar a gestionar y asignar tareas dentro de un servidor. Permite a los administradores o usuarios asignar tareas a otros miembros del servidor, enviándolas por mensaje directo (DM). Los usuarios pueden marcar las tareas como completadas o pendientes utilizando botones interactivos.
