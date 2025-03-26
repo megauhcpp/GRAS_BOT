@@ -113,4 +113,3 @@ Este proyecto está bajo la Licencia MIT. Para más detalles, consulta el archiv
 ---
 
 ¡Gracias por usar el **Bot GRAS**!
-```
