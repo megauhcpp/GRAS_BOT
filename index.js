@@ -14,8 +14,6 @@ const client = new Client({
 });
 
 const TASKS_CHANNEL_ID = '1354404488559071443'; // Canal privado donde se registran tareas completadas
-const TICK_EMOJI = '✔';
-const CROSS_EMOJI = '❌';
 
 client.once('ready', () => {
     console.log(`Bot conectado como ${client.user.tag}`);
