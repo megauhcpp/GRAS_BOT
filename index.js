@@ -2,7 +2,8 @@ const { Client, GatewayIntentBits } = require('discord.js');
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
 
 // Token del bot (reemplázalo con tu token)
-const TOKEN = 'TU_TOKEN_AQUI';
+require('dotenv').config();
+const TOKEN = process.env.DISCORD_BOT_TOKEN;
 
 // Objeto para almacenar tareas
 const tasks = {};
