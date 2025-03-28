@@ -18,7 +18,8 @@ const {
 } = require("discord.js");
 const fetch = require("node-fetch");
 
-// Constantes
+// Constantes de configuración
+const LOCATIONS = ["Calpe", "Granada", "Malaga"];
 const VIDEO_CHANNEL_ID = "1354734580589924416";
 const STARTER_CHANNELS = [
   "1354754019737862307", // Calpe
@@ -109,7 +110,7 @@ async function setupStarterChannel(channel) {
   }
 }
 
-// Función para asignar un starter channel aleatorio a un usuario
+// Función para asignar un starter channel a un usuario según su rol
 async function assignRandomStarterChannel(userId, guild) {
   try {
     const member = await guild.members.fetch(userId);
@@ -137,7 +138,7 @@ async function assignRandomStarterChannel(userId, guild) {
             guild,
             member.user.username,
             userId,
-            ["Calpe", "Granada", "Malaga"][i]
+            LOCATIONS[i]
           );
 
           // Solo ocultar el starter channel si el usuario tiene un canal en esa categoría
@@ -155,7 +156,7 @@ async function assignRandomStarterChannel(userId, guild) {
 
     // Mostrar mensaje de asignación con todas las categorías
     const categoryNames = userCategories.map(
-      (index) => ["Calpe", "Granada", "Malaga"][index]
+      (index) => LOCATIONS[index]
     );
     console.log(
       `Usuario ${userId} asignado a los starter channels de: ${categoryNames.join(
@@ -179,7 +180,7 @@ async function updateStarterChannelVisibility(guild, userId) {
       try {
         const channel = await client.channels.fetch(STARTER_CHANNELS[i]);
         if (channel) {
-          const categoryName = ["Calpe", "Granada", "Malaga"][i];
+          const categoryName = LOCATIONS[i];
           const hasChannel = hasChannelInCategory(
             guild,
             member.user.username,
@@ -386,7 +387,7 @@ client.once("ready", async () => {
           getChannelName(
             member.user.username,
             memberId,
-            ["Calpe", "Granada", "Malaga"][0]
+            LOCATIONS[0]
           )
       );
 
@@ -397,7 +398,7 @@ client.once("ready", async () => {
         const userCategories = [];
         for (let i = 0; i < CATEGORY_ROLES.length; i++) {
           if (member.roles.cache.has(CATEGORY_ROLES[i])) {
-            userCategories.push(["Calpe", "Granada", "Malaga"][i]);
+            userCategories.push(LOCATIONS[i]);
           }
         }
 
@@ -527,7 +528,7 @@ client.on("interactionCreate", async (interaction) => {
       });
 
       // Actualizar la visibilidad del starter channel solo para esta categoría
-      const starterChannelIndex = ["Calpe", "Granada", "Malaga"].indexOf(
+      const starterChannelIndex = LOCATIONS.indexOf(
         categoryName
       );
       if (starterChannelIndex !== -1) {
@@ -985,12 +986,11 @@ client.on("interactionCreate", async (interaction) => {
       const channelName = getChannelName(user.username, userId, categoryName);
       console.log("Buscando canal:", { categoryName, channelName });
 
-      const userChannel = interaction.guild.channels.cache.find((channel) => {
+      const userChannel = interaction.guild.channels.cache.find((ch) => {
         const matches =
-          channel.name === channelName &&
-          channel.parentId === interaction.channel.parentId;
+          ch.name === channelName && ch.parentId === interaction.channel.parentId;
         console.log(
-          `Comparando canal ${channel.name} (${channel.parentId}) con ${channelName} (${interaction.channel.parentId}): ${matches}`
+          `Comparando canal ${ch.name} con ${channelName} en categoría ${ch.parent?.name}: ${matches}`
         );
         return matches;
       });
