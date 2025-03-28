@@ -175,7 +175,10 @@ async function assignRandomStarterChannel(userId, guild) {
 async function updateStarterChannelVisibility(guild, userId) {
   try {
     const member = await guild.members.fetch(userId);
-
+    
+    // Verificar si el usuario tiene algún rol de categoría
+    const hasAnyCategoryRole = CATEGORY_ROLES.some(roleId => member.roles.cache.has(roleId));
+    
     for (let i = 0; i < STARTER_CHANNELS.length; i++) {
       try {
         const channel = await client.channels.fetch(STARTER_CHANNELS[i]);
@@ -189,13 +192,14 @@ async function updateStarterChannelVisibility(guild, userId) {
           );
           const hasRole = member.roles.cache.has(CATEGORY_ROLES[i]);
 
-          // Solo ocultar el starter channel si el usuario tiene un canal en esa categoría
+          // Si el usuario no tiene ningún rol de categoría, no debería ver ningún canal
+          // Si tiene roles, solo verá los canales donde tiene el rol específico y no tiene canal propio 
           await channel.permissionOverwrites.edit(userId, {
-            ViewChannel: !hasChannel && hasRole,
+            ViewChannel: hasAnyCategoryRole && !hasChannel && hasRole,
           });
         }
       } catch (error) {
-        console.error(`Error al actualizar el canal ${channelId}:`, error);
+        console.error(`Error al actualizar el canal ${STARTER_CHANNELS[i]}:`, error);
       }
     }
   } catch (error) {
@@ -344,102 +348,47 @@ client.once("ready", async () => {
   const guild = client.guilds.cache.first();
   if (!guild) return;
 
-  // Array para almacenar usuarios sin rol
-  const usersWithoutRole = [];
-  // Objeto para almacenar usuarios y sus roles
-  const userRoles = new Map();
+  console.log("Actualizando visibilidad de canales para todos los miembros...");
+  
+  try {
+    // Obtener todos los miembros del servidor
+    const members = await guild.members.fetch();
+    
+    // Actualizar la visibilidad de los canales para cada miembro
+    for (const [memberId, member] of members) {
+      if (!member.user.bot) {
+        await updateStarterChannelVisibility(guild, memberId);
+      }
+    }
+    
+    console.log("Visibilidad de canales actualizada correctamente");
+  } catch (error) {
+    console.error("Error al actualizar la visibilidad de los canales:", error);
+  }
 
-  // Configurar los canales iniciales y sus permisos
+  // Configurar los canales iniciales
   for (const channelId of STARTER_CHANNELS) {
     try {
       const channel = await client.channels.fetch(channelId);
       if (channel) {
-        // Configurar el mensaje del canal
         await setupStarterChannel(channel);
-
-        // Buscar o crear el canal de asignación en la misma categoría
-        const assignmentChannel =
-          channel.parent.children.cache.find(
-            (ch) => ch.name === "asignacion-tareas"
-          ) ||
-          (await channel.guild.channels.create({
-            name: "asignacion-tareas",
-            type: ChannelType.GuildText,
-            parent: channel.parent,
-          }));
-
-        // Configurar el canal de asignación
-        await setupAssignmentChannel(assignmentChannel);
       }
     } catch (error) {
-      console.error(`Error al obtener el canal ${channelId}:`, error);
+      console.error(`Error al configurar el canal ${channelId}:`, error);
     }
   }
 
-  // Configurar los permisos para cada miembro
-  const members = await guild.members.fetch();
-  for (const [memberId, member] of members) {
-    if (!member.user.bot) {
-      // Verificar si el usuario ya tiene un canal
-      const hasChannel = guild.channels.cache.some(
-        (channel) =>
-          channel.name ===
-          getChannelName(
-            member.user.username,
-            memberId,
-            LOCATIONS[0]
-          )
-      );
-
-      if (!hasChannel) {
-        await assignRandomStarterChannel(memberId, guild);
-
-        // Verificar los roles del usuario
-        const userCategories = [];
-        for (let i = 0; i < CATEGORY_ROLES.length; i++) {
-          if (member.roles.cache.has(CATEGORY_ROLES[i])) {
-            userCategories.push(LOCATIONS[i]);
-          }
-        }
-
-        if (userCategories.length === 0) {
-          usersWithoutRole.push({
-            id: memberId,
-            tag: member.user.tag,
-          });
-        } else {
-          userRoles.set(member.user.tag, userCategories);
-        }
-      } else {
-        // Si ya tiene canal, ocultar todos los starter channels
-        await updateStarterChannelVisibility(guild, memberId);
-      }
+  // Configurar el canal de asignación de tareas
+  try {
+    const assignmentChannel = guild.channels.cache.find(
+      (channel) => channel.name === "asignacion-tareas"
+    );
+    if (assignmentChannel) {
+      await setupAssignmentChannel(assignmentChannel);
     }
+  } catch (error) {
+    console.error("Error al configurar el canal de asignación:", error);
   }
-
-  // Mostrar resumen de usuarios
-  console.log("\nResumen de asignación de roles:");
-  console.log("----------------------------------------");
-
-  if (userRoles.size > 0) {
-    console.log("Usuarios con roles:");
-    for (const [userTag, categories] of userRoles) {
-      console.log(`${userTag}: ${categories.join(", ")}`);
-    }
-    console.log("----------------------------------------");
-  }
-
-  if (usersWithoutRole.length > 0) {
-    console.log("Usuarios sin rol:");
-    for (const user of usersWithoutRole) {
-      console.log(`${user.tag} (${user.id})`);
-    }
-    console.log("----------------------------------------");
-  }
-
-  console.log(
-    `Total: ${userRoles.size} usuarios con rol, ${usersWithoutRole.length} usuarios sin rol\n`
-  );
 });
 
 // Evento cuando un nuevo miembro se une al servidor
@@ -1104,20 +1053,14 @@ client.on("guildMemberUpdate", async (oldMember, newMember) => {
   // Verificar si hubo cambios en los roles relevantes
   const oldRoles = oldMember.roles.cache;
   const newRoles = newMember.roles.cache;
-  let rolesChanged = false;
-
-  for (const roleId of CATEGORY_ROLES) {
-    if (oldRoles.has(roleId) !== newRoles.has(roleId)) {
-      rolesChanged = true;
-      break;
-    }
-  }
-
-  if (rolesChanged && !newMember.user.bot) {
-    console.log(
-      `Roles actualizados para ${newMember.user.tag}, reconfigurando canales...`
-    );
-    await assignRandomStarterChannel(newMember.id, newMember.guild);
+  
+  const hadCategoryRole = CATEGORY_ROLES.some(roleId => oldRoles.has(roleId));
+  const hasCategoryRole = CATEGORY_ROLES.some(roleId => newRoles.has(roleId));
+  
+  // Si hubo cambios en los roles de categoría, actualizar visibilidad
+  if (hadCategoryRole !== hasCategoryRole || 
+      CATEGORY_ROLES.some(roleId => oldRoles.has(roleId) !== newRoles.has(roleId))) {
+    await updateStarterChannelVisibility(newMember.guild, newMember.id);
   }
 });
 
