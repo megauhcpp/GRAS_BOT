@@ -17,13 +17,14 @@ const {
 } = require("discord.js");
 
 // Constantes de configuración
-const LOCATIONS = ["Calpe", "Granada", "Malaga", "Sevilla"];
+const LOCATIONS = ["Calpe", "Granada", "Malaga", "Sevilla", "Cambrils"];
 const VIDEO_CHANNEL_ID = "1354734580589924416";
 const STARTER_CHANNELS = [
   "1354754019737862307", // Calpe
   "1354757348199239704", // Granada
   "1354757370676248596", // Malaga
-  "1355112644952199229" // Sevilla
+  "1355112644952199229", // Sevilla
+  "1355160490179035236" // Cambrils
 ];
 
 const CATEGORY_ROLES = {
@@ -42,6 +43,10 @@ const CATEGORY_ROLES = {
   sevilla: {
     categoryId: "1355112568850743427",
     roleId: "1355112904076300389"
+  },
+  cambrils: {
+    categoryId: "1355160400856879104",
+    roleId: "1355160575058907357"
   }
 };
 
@@ -188,35 +193,55 @@ async function updateStarterChannelVisibility(guild, userId) {
   try {
     const member = await guild.members.fetch(userId);
     
-    // Verificar si el usuario tiene algún rol de categoría
-    const hasAnyCategoryRole = LOCATIONS.some(location => member.roles.cache.has(CATEGORY_ROLES[location.toLowerCase()].roleId));
-    
+    // Para cada starter channel
     for (let i = 0; i < STARTER_CHANNELS.length; i++) {
       try {
         const channel = await client.channels.fetch(STARTER_CHANNELS[i]);
         if (channel) {
           const categoryName = LOCATIONS[i];
-          const hasChannel = hasChannelInCategory(
+          const roleId = CATEGORY_ROLES[categoryName.toLowerCase()].roleId;
+          
+          // Verificar si el usuario tiene el rol de esta categoría
+          const hasRole = member.roles.cache.has(roleId);
+          
+          if (!hasRole) {
+            // Si no tiene el rol, no debería ver ningún canal
+            await channel.permissionOverwrites.edit(userId, {
+              ViewChannel: false
+            });
+            continue;
+          }
+
+          // Verificar si tiene un canal específico en esta categoría
+          const hasSpecificChannel = hasChannelInCategory(
             guild,
             member.user.username,
             userId,
             categoryName
           );
-          const hasRole = member.roles.cache.has(CATEGORY_ROLES[categoryName.toLowerCase()].roleId);
 
-          // Si el usuario no tiene ningún rol de categoría, no debería ver ningún canal
-          // Si tiene roles, solo verá los canales donde tiene el rol específico y no tiene canal propio
+          // Si tiene el rol:
+          // - Si NO tiene canal específico -> mostrar el canal de tareas
+          // - Si tiene canal específico -> ocultar el canal de tareas
           await channel.permissionOverwrites.edit(userId, {
-            ViewChannel: hasAnyCategoryRole && !hasChannel && hasRole,
+            ViewChannel: !hasSpecificChannel
           });
+
+          console.log(`Visibilidad actualizada para ${member.user.username} en ${categoryName}:
+            - Tiene rol: ${hasRole}
+            - Tiene canal específico: ${hasSpecificChannel}
+            - Puede ver canal de tareas: ${!hasSpecificChannel}`);
         }
       } catch (error) {
-        console.error(`Error al actualizar el canal ${STARTER_CHANNELS[i]}:`, error);
+        console.error(
+          `Error al configurar el canal ${STARTER_CHANNELS[i]}:`,
+          error
+        );
       }
     }
   } catch (error) {
     console.error(
-      `Error al actualizar visibilidad de starter channels para usuario ${userId}:`,
+      `Error al actualizar visibilidad de canales para usuario ${userId}:`,
       error
     );
   }
@@ -247,7 +272,7 @@ async function setupAssignmentChannel(channel) {
 }
 
 // Función para actualizar el mensaje de asignación existente
-async function updateAssignmentMessage(channel) {
+async function updateAssignmentMessage(channel, selectedUserId = null) {
   try {
     // Buscar el mensaje existente
     const messages = await channel.messages.fetch();
@@ -257,6 +282,12 @@ async function updateAssignmentMessage(channel) {
         msg.components.length > 0 &&
         msg.components[0].components[0]?.data?.custom_id === "select_user_task"
     );
+
+    // Si no se proporciona un selectedUserId pero existe un mensaje con una selección
+    if (!selectedUserId && existingMessage) {
+      const currentSelect = existingMessage.components[0].components[0];
+      selectedUserId = currentSelect.options.find(opt => opt.default)?.value;
+    }
 
     // Obtener el rol correspondiente a esta categoría
     const categoryId = channel.parent.id;
@@ -284,6 +315,7 @@ async function updateAssignmentMessage(channel) {
             .setLabel(member.user.username)
             .setDescription(`ID: ${member.user.id}`)
             .setValue(member.user.id)
+            .setDefault(member.user.id === selectedUserId) // Mantener la selección 
         )
       );
     } else {
@@ -300,10 +332,10 @@ async function updateAssignmentMessage(channel) {
     const row1 = new ActionRowBuilder().addComponents(userSelect);
     const row2 = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
-        .setCustomId("assign_task")
+        .setCustomId(`assign_task_${selectedUserId}`) // Incluir el ID del usuario en el customId
         .setLabel("Asignar Tareas")
         .setStyle(ButtonStyle.Primary)
-        .setDisabled(filteredMembers.size === 0)
+        .setDisabled(filteredMembers.size === 0 || !selectedUserId || selectedUserId === "no_users")
     );
 
     const messageContent = {
@@ -327,42 +359,47 @@ async function updateAssignmentMessage(channel) {
 // Función para enviar mensajes de tarea a un canal
 async function sendTaskMessages(user, tasks, channel) {
   try {
-    console.log(`Enviando tareas a ${user.username}`);
+    // Obtener el canal de registro
+    const registroChannel = channel.parent.children.cache.find(
+      ch => ch.name === "registro-tareas"
+    );
+
+    if (!registroChannel) {
+      console.error("No se encontró el canal de registro-tareas");
+      return;
+    }
 
     for (const task of tasks) {
+      const embed = new EmbedBuilder()
+        .setColor(0x0099ff)
+        .setTitle("Nueva Tarea")
+        .setDescription(task)
+        .setTimestamp();
+
+      // Primero enviamos el mensaje para obtener su ID
+      const message = await channel.send({
+        content: `${user}`,
+        embeds: [embed]
+      });
+
+      // Luego creamos los botones con el ID del mensaje
       const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
-          .setCustomId(`upload_video_${task}_${channel.id}`)
-          .setLabel("📤 Subir video")
+          .setCustomId(`start_task_${message.id}`) // Usar directamente el ID del mensaje
+          .setLabel("Registrar inicio")
+          .setStyle(ButtonStyle.Success),
+        new ButtonBuilder()
+          .setCustomId("upload_video")
+          .setLabel("Subir Video")
           .setStyle(ButtonStyle.Primary)
+          .setDisabled(true) // Inicialmente deshabilitado
       );
 
-      const cleanTask = task.replace(/<[^>]+>/g, "").trim();
-      
-      // Separar título y descripción
-      const { title, description } = parseTaskContent(cleanTask);
-      
-      console.log(`Título: ${title}`);
-      console.log(`Descripción: ${description}`);
-
-      const taskEmbed = new EmbedBuilder()
-        .setColor(0x0099ff)
-        .setTitle("Tarea asignada")
-        .setDescription(
-          `**Título:**\n\`\`\`${title}\`\`\`\n` +
-          `**Descripción:**\n\`\`\`${description}\`\`\``
-        )
-        .setFooter({ text: "Sube tu video para completar la tarea." });
-
-      await channel.send({
-        embeds: [taskEmbed],
-        components: [row],
-      });
-      console.log(`Mensaje de tarea enviado a ${user.username}: ${title}`);
+      // Actualizamos el mensaje con los botones
+      await message.edit({ components: [row] });
     }
   } catch (error) {
-    console.error(`No se pudo enviar mensaje a ${user.tag}:`, error);
-    throw error; // Re-lanzar el error para que se maneje en el nivel superior
+    console.error("Error al enviar mensajes de tarea:", error);
   }
 }
 
@@ -407,6 +444,43 @@ async function toggleUploadButtons(channel, userId, disable = true) {
   } catch (error) {
     console.error('Error al toggle botones de subida:', error);
   }
+}
+
+// Función para enviar video al canal de confirmación
+async function sendVideoConfirmation(video, interaction, message, duration) {
+  const videoChannel = await client.channels.fetch(VIDEO_CHANNEL_ID);
+  if (!videoChannel) throw new Error("No se encontró el canal de videos");
+
+  const { hours, minutes, seconds } = duration;
+  const originalEmbed = message.embeds[0];
+  
+  const videoEmbed = new EmbedBuilder()
+    .setColor(0x0099ff)
+    .setTitle("Video de Tarea Completada")
+    .setDescription(`**Tarea:** ${originalEmbed.description}`)
+    .addFields([
+      {
+        name: "Usuario",
+        value: `${interaction.user}`,
+        inline: true
+      },
+      {
+        name: "Duración",
+        value: `${hours}h ${minutes}m ${seconds}s`,
+        inline: true
+      },
+      {
+        name: "Tarea Original",
+        value: `[Ver tarea](${message.url})`,
+        inline: true
+      }
+    ])
+    .setTimestamp();
+
+  return await videoChannel.send({
+    embeds: [videoEmbed],
+    files: [video.url]
+  });
 }
 
 client.once("ready", async () => {
@@ -487,29 +561,97 @@ client.on("guildMemberAdd", async (member) => {
 
 // Evento cuando se elimina un canal
 client.on("channelDelete", async (channel) => {
-  if (channel.name.startsWith("tareas-")) {
-    try {
-      // Extraer el ID del usuario del nombre del canal
-      const userId = channel.name.split("-").pop();
-      if (!userId) return;
+  try {
+    // Verificar si el canal eliminado es un canal de tareas de usuario
+    const categoryName = channel.parent?.name;
+    if (!categoryName || !LOCATIONS.includes(categoryName)) return;
 
-      const guild = channel.guild;
-      const member = await guild.members.fetch(userId).catch(() => null);
+    // Extraer el ID del usuario del nombre del canal
+    const match = channel.name.match(/tareas-.*-(\d+)$/);
+    if (!match) return;
 
-      if (member && !member.user.bot) {
-        // Asignar un nuevo starter channel aleatorio al usuario
-        await assignRandomStarterChannel(userId, guild);
-        console.log(
-          `Canal de tareas eliminado para ${member.user.tag}, reasignando starter channel`
-        );
-      }
-    } catch (error) {
-      console.error("Error al procesar eliminación de canal:", error);
-    }
+    const userId = match[1];
+    console.log(`Canal eliminado: ${channel.name}, actualizando visibilidad para usuario ${userId}`);
+
+    // Actualizar la visibilidad del starter channel para este usuario
+    const guild = channel.guild;
+    const member = await guild.members.fetch(userId);
+    if (!member) return;
+
+    // Verificar si el usuario tiene el rol de la categoría
+    const categoryRole = CATEGORY_ROLES[categoryName.toLowerCase()];
+    if (!categoryRole) return;
+
+    const hasRole = member.roles.cache.has(categoryRole.roleId);
+    if (!hasRole) return;
+
+    // Buscar el starter channel correspondiente
+    const starterChannelIndex = LOCATIONS.findIndex(loc => loc.toLowerCase() === categoryName.toLowerCase());
+    if (starterChannelIndex === -1) return;
+
+    const starterChannel = await client.channels.fetch(STARTER_CHANNELS[starterChannelIndex]);
+    if (!starterChannel) return;
+
+    // Mostrar el canal de tareas ya que el usuario no tiene un canal en esta categoría
+    await starterChannel.permissionOverwrites.edit(userId, {
+      ViewChannel: true
+    });
+
+    console.log(`Visibilidad actualizada para ${member.user.username} en ${categoryName}`);
+  } catch (error) {
+    console.error("Error al manejar eliminación de canal:", error);
   }
 });
 
-// Manejar las interacciones con el botón
+// Evento cuando cambian los roles de un miembro
+client.on("guildMemberUpdate", async (oldMember, newMember) => {
+  try {
+    // Verificar si hubo cambios en roles de categoría
+    let roleChanged = false;
+    
+    // Comprobar cada categoría
+    for (const location of LOCATIONS) {
+      const roleId = CATEGORY_ROLES[location.toLowerCase()].roleId;
+      const hadRole = oldMember.roles.cache.has(roleId);
+      const hasRole = newMember.roles.cache.has(roleId);
+
+      // Si hubo cambio en este rol específico
+      if (hadRole !== hasRole) {
+        roleChanged = true;
+        console.log(`Cambio en rol de ${location}: ${hadRole} -> ${hasRole}`);
+        
+        // Actualizar visibilidad de canales
+        await updateStarterChannelVisibility(newMember.guild, newMember.id);
+        
+        // Actualizar mensaje de asignación
+        try {
+          const categoryId = CATEGORY_ROLES[location.toLowerCase()].categoryId;
+          const category = await newMember.guild.channels.fetch(categoryId);
+          if (category) {
+            const assignmentChannel = category.children.cache.find(
+              (channel) => channel.name === "asignacion-tareas"
+            );
+            if (assignmentChannel) {
+              console.log(`Actualizando mensaje de asignación en ${location}...`);
+              await updateAssignmentMessage(assignmentChannel);
+            }
+          }
+        } catch (error) {
+          console.error(`Error al actualizar mensaje de asignación para ${location}:`, error);
+        }
+      }
+    }
+
+    if (roleChanged) {
+      console.log(`Roles actualizados para ${newMember.user.username}:
+        Roles anteriores: ${Array.from(oldMember.roles.cache.values()).map(r => r.name).join(', ')}
+        Roles nuevos: ${Array.from(newMember.roles.cache.values()).map(r => r.name).join(', ')}`);
+    }
+  } catch (error) {
+    console.error('Error al manejar actualización de roles:', error);
+  }
+}); 
+
 client.on("interactionCreate", async (interaction) => {
   // Manejar el botón de crear canal
   if (interaction.isButton() && interaction.customId === "create_channel") {
@@ -754,16 +896,26 @@ client.on("interactionCreate", async (interaction) => {
       await client.channels.fetch(VIDEO_CHANNEL_ID).then(videoChannel => {
         const videoEmbed = new EmbedBuilder()
           .setColor(0x0099ff)
-          .setTitle("Tarea Completada")
-          .setDescription(
-            `**Usuario:** ${interaction.user}\n\n` +
-            `**Título:**\n\`\`\`${taskTitle}\`\`\`\n` +
-            `**Descripción:**\n\`\`\`${taskDescription}\`\`\`\n\n` +
-            `**Fecha de entrega:** ${formattedDate}\n` +
-            `**Canal:** ${interaction.channel.name}\n` +
-            `**Link al mensaje:** ${interaction.message.url}`
-          )
-          .setFooter({ text: "Video subido y tarea completada" });
+          .setTitle("Video de Tarea Completada")
+          .setDescription(`**Tarea:** ${originalEmbed.description}`)
+          .addFields([
+            {
+              name: "Usuario",
+              value: `${interaction.user}`,
+              inline: true
+            },
+            {
+              name: "Duración",
+              value: `${hours}h ${minutes}m ${seconds}s`,
+              inline: true
+            },
+            {
+              name: "Tarea Original",
+              value: `[Ver tarea](${interaction.message.url})`,
+              inline: true
+            }
+          ])
+          .setTimestamp();
 
         // Crear un nuevo AttachmentBuilder con el video
         const videoAttachment = new AttachmentBuilder(attachment.url, {
@@ -796,7 +948,7 @@ client.on("interactionCreate", async (interaction) => {
           });
 
           interaction.followUp({
-            content: "¡Video subido y tarea completada correctamente! El video ha sido enviado al canal de confirmación.",
+            content: "¡Video subido correctamente! El video ha sido enviado al canal de confirmación.",
             flags: [1 << 6],
           }).then(() => {
             // Reactivar los botones de otras tareas
@@ -825,21 +977,20 @@ client.on("interactionCreate", async (interaction) => {
   }
 
   // Manejar la selección de usuario para tareas
-  if (
-    interaction.isStringSelectMenu() &&
-    interaction.customId === "select_user_task"
-  ) {
+  if (interaction.isStringSelectMenu() && interaction.customId === "select_user_task") {
     const selectedUserId = interaction.values[0];
-
-    // Obtener el rol correspondiente a esta categoría
+    
+    // Obtener miembros con el rol de la categoría
     const categoryId = interaction.channel.parent.id;
-    const roleId = Object.entries(CATEGORY_ROLES).find(([location, data]) => 
+    const categoryRole = Object.entries(CATEGORY_ROLES).find(([location, data]) => 
       data.categoryId === categoryId
-    )?.[1]?.roleId;
-
-    // Recrear el menú con el usuario seleccionado
+    );
+    const roleId = categoryRole?.[1]?.roleId;
+    
     const members = await interaction.guild.members.fetch();
     const filteredMembers = members.filter(member => !member.user.bot && member.roles.cache.has(roleId));
+
+    // Crear el select menu con el usuario seleccionado
     const userSelect = new StringSelectMenuBuilder()
       .setCustomId("select_user_task")
       .setPlaceholder("Selecciona un usuario")
@@ -850,76 +1001,63 @@ client.on("interactionCreate", async (interaction) => {
             .setLabel(member.user.username)
             .setDescription(`ID: ${member.user.id}`)
             .setValue(member.user.id)
+            .setDefault(member.user.id === selectedUserId)
         )
       );
+
     const row1 = new ActionRowBuilder().addComponents(userSelect);
     const row2 = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
-        .setCustomId(`assign_task_${selectedUserId}`)
+        .setCustomId(`assign_task_${selectedUserId}`) // Incluir el ID del usuario en el customId
         .setLabel("Asignar Tareas")
         .setStyle(ButtonStyle.Primary)
-        .setDisabled(false)
+        .setDisabled(filteredMembers.size === 0 || !selectedUserId || selectedUserId === "no_users")
     );
 
+    // Actualizar el mensaje directamente
     await interaction.update({
-      components: [row1, row2],
+      content: "Selecciona un usuario para asignarle tareas:",
+      components: [row1, row2]
     });
-    return;
   }
 
   // Manejar el botón de asignar tareas
-  if (
-    interaction.isButton() &&
-    interaction.customId.startsWith("assign_task_")
-  ) {
-    // Verificar que estamos en un canal de asignación
-    if (interaction.channel.name !== "asignacion-tareas") {
+  if (interaction.isButton() && interaction.customId.startsWith("assign_task_")) {
+    try {
+      const userId = interaction.customId.split("_")[2];
+      console.log("Abriendo modal de tarea para usuario:", userId);
+
+      const modal = new ModalBuilder()
+        .setCustomId(`task_modal_${userId}`) // Formato: task_modal_userId
+        .setTitle("Asignar Tarea");
+
+      const titleInput = new TextInputBuilder()
+        .setCustomId("taskTitle")
+        .setLabel("Título de la tarea")
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder("Escribe el título de la tarea")
+        .setRequired(true);
+
+      const descriptionInput = new TextInputBuilder()
+        .setCustomId("taskDescription")
+        .setLabel("Descripción (opcional)")
+        .setStyle(TextInputStyle.Paragraph)
+        .setPlaceholder("Añade más detalles sobre la tarea (opcional)")
+        .setRequired(false);
+
+      const firstRow = new ActionRowBuilder().addComponents(titleInput);
+      const secondRow = new ActionRowBuilder().addComponents(descriptionInput);
+
+      modal.addComponents(firstRow, secondRow);
+
+      await interaction.showModal(modal);
+    } catch (error) {
+      console.error("Error al abrir el modal de tarea:", error);
       await interaction.reply({
-        content:
-          "Las tareas solo pueden ser asignadas desde el canal de asignación.",
-        flags: [1 << 6],
+        content: "Hubo un error al abrir el formulario de tarea.",
+        flags: [1 << 6]
       });
-      return;
     }
-
-    const userId = interaction.customId.split("_")[2];
-    console.log("Abriendo modal de tarea para usuario:", userId);
-
-    // Verificar si hay un usuario seleccionado y es válido
-    const selectedUserId = interaction.message.components[0].components[0].options.find(opt => opt.default)?.value;
-    
-    if (!selectedUserId || selectedUserId === "no_users") {
-      await interaction.reply({
-        content: "No hay usuarios disponibles para asignar tareas en esta categoría.",
-        ephemeral: true
-      });
-      return;
-    }
-
-    const modal = new ModalBuilder()
-      .setCustomId(`task_modal_${userId}`) // Formato: task_modal_userId
-      .setTitle("Asignar Tarea");
-
-    const taskInput = new TextInputBuilder()
-      .setCustomId("task")
-      .setLabel("Tarea")
-      .setStyle(TextInputStyle.Short)
-      .setPlaceholder("Escribe la tarea")
-      .setRequired(true);
-
-    const descriptionInput = new TextInputBuilder()
-      .setCustomId("description")
-      .setLabel("Descripción (opcional)")
-      .setStyle(TextInputStyle.Paragraph)
-      .setPlaceholder("Añade más detalles sobre la tarea")
-      .setRequired(false);
-
-    const firstRow = new ActionRowBuilder().addComponents(taskInput);
-    const secondRow = new ActionRowBuilder().addComponents(descriptionInput);
-    modal.addComponents(firstRow, secondRow);
-
-    await interaction.showModal(modal);
-    return;
   }
 
   // Manejar el modal de asignar tarea
@@ -936,8 +1074,8 @@ client.on("interactionCreate", async (interaction) => {
       const user = await client.users.fetch(userId);
       console.log("Usuario encontrado:", user.tag);
 
-      const task = interaction.fields.getTextInputValue("task");
-      const description = interaction.fields.getTextInputValue("description");
+      const task = interaction.fields.getTextInputValue("taskTitle");
+      const description = interaction.fields.getTextInputValue("taskDescription");
       console.log("Tarea y descripción:", { task, description });
 
       // Buscar el canal del usuario en la categoría actual
@@ -959,15 +1097,15 @@ client.on("interactionCreate", async (interaction) => {
       const userChannel = interaction.guild.channels.cache.find((ch) => {
         const matches =
           ch.name === channelName && ch.parentId === interaction.channel.parentId;
-        console.log(
+        /* console.log(
           `Comparando canal ${ch.name} con ${channelName} en categoría ${ch.parent?.name}: ${matches}`
-        );
+        ); */
         return matches;
       });
 
       if (!userChannel) {
         await interaction.reply({
-          content: `No se encontró el canal de tareas para ${user.username} en la categoría ${categoryName}.\nBuscando canal: ${channelName}`,
+          content: `No se encontró el canal de tareas para ${user.username} en la categoría ${categoryName}.\nPor favor, contacte al usuario ${user.username} para que cree su canal de tareas.`,
           flags: [1 << 6],
         });
         return;
@@ -999,119 +1137,227 @@ client.on("interactionCreate", async (interaction) => {
         flags: [1 << 6],
       });
     }
-    return;
-  }
-});
-
-client.on("messageCreate", async (message) => {
-  if (message.author.bot || message.channel.type !== ChannelType.GuildText)
-    return;
-
-  // Si el mensaje no es de un administrador o no está en el canal de asignación, ignorarlo
-  if (
-    !message.member?.permissions.has(PermissionsBitField.Flags.Administrator) ||
-    message.channel.name !== "asignacion-tareas"
-  ) {
-    return;
   }
 
-  // Obtener menciones de usuarios y tareas
-  const mentions = message.mentions.users;
-  const tasks = message.content.split("\n").filter((line) => line.trim());
+  // Manejar el botón de inicio de tarea
+  if (interaction.isButton() && interaction.customId.startsWith('start_task_')) {
+    try {
+      const messageId = interaction.customId.split('_')[2];
+      const message = interaction.message; // Usar directamente el mensaje de la interacción
+      const taskEmbed = message.embeds[0];
+      const startTime = Date.now();
 
-  if (mentions.size === 0 || tasks.length === 0) {
-    return;
-  }
-
-  // Procesar cada usuario mencionado
-  for (const [userId, user] of mentions) {
-    const member = await message.guild.members.fetch(userId);
-    if (!member) continue;
-
-    // Buscar el canal del usuario en la categoría actual
-    const categoryName = message.channel.parent.name;
-    const channelName = getChannelName(user.username, userId, categoryName);
-    console.log("Buscando canal:", {
-      username: user.username,
-      userId: userId,
-      categoryName: categoryName,
-      channelNameBuscado: channelName,
-    });
-
-    // Listar todos los canales disponibles para debug
-    console.log("Canales disponibles en la categoría:");
-    message.guild.channels.cache
-      .filter((ch) => ch.parentId === message.channel.parentId)
-      .forEach((ch) => console.log(`- ${ch.name}`));
-
-    const userChannel = message.guild.channels.cache.find((ch) => {
-      const matches =
-        ch.name === channelName && ch.parentId === message.channel.parentId;
-      console.log(
-        `Comparando canal ${ch.name} con ${channelName} en categoría ${ch.parent?.name}: ${matches}`
+      // Actualizar los botones
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`started_task_${messageId}`) // Cambiar el ID para evitar nuevas interacciones
+          .setLabel("Tarea iniciada")
+          .setStyle(ButtonStyle.Success)
+          .setDisabled(true),
+        new ButtonBuilder()
+          .setCustomId("upload_video")
+          .setLabel("Subir Video")
+          .setStyle(ButtonStyle.Primary)
+          .setDisabled(false)
       );
-      return matches;
-    });
 
-    if (!userChannel) {
-      await message.reply(
-        `No se encontró el canal de tareas para ${user.username} en la categoría ${categoryName}.\nBuscando canal: ${channelName}`
+      // Actualizar el mensaje original
+      await message.edit({ components: [row] });
+
+      // Enviar mensaje al canal de registro
+      const registroChannel = interaction.channel.parent.children.cache.find(
+        ch => ch.name === "registro-tareas"
       );
-      continue;
+
+      if (registroChannel) {
+        const registroEmbed = new EmbedBuilder()
+          .setColor(0x00FF00)
+          .setTitle("Inicio de Tarea")
+          .setDescription(`El usuario ${interaction.user} ha iniciado la tarea:\n**${taskEmbed.description}**`)
+          .addFields({ 
+            name: "Enlace a la tarea", 
+            value: `[Ver tarea](${message.url})` 
+          })
+          .setTimestamp();
+
+        await registroChannel.send({ embeds: [registroEmbed] });
+      }
+
+      await interaction.reply({
+        content: "¡Tarea iniciada! Puedes subir el video cuando la completes.",
+        flags: [1 << 6],
+      });
+
+      // Guardar el tiempo de inicio en el mensaje
+      message.startTime = startTime;
+
+    } catch (error) {
+      console.error("Error al iniciar tarea:", error);
+      await interaction.reply({
+        content: "Hubo un error al iniciar la tarea.",
+        flags: [1 << 6],
+      });
     }
-
-    // Enviar las tareas al canal del usuario
-    await sendTaskMessages(user, tasks, userChannel);
   }
 
-  // Eliminar el mensaje original de asignación
-  await message.delete();
-});
+  // Modificar el manejador existente de upload_video
+  if (interaction.customId === "upload_video") {
+    try {
+      const message = interaction.message;
+      const startTime = message.startTime;
+      
+      if (!startTime) {
+        await interaction.reply({
+          content: "Debes iniciar la tarea antes de subir el video.",
+          flags: [1 << 6]
+        });
+        return;
+      }
 
-// Evento cuando cambian los roles de un miembro
-client.on("guildMemberUpdate", async (oldMember, newMember) => {
-  // Verificar si hubo cambios en los roles relevantes
-  const oldRoles = oldMember.roles.cache;
-  const newRoles = newMember.roles.cache;
-  
-  // Actualizar visibilidad de canales si hay cambios en roles de categoría
-  const hadAnyCategoryRole = LOCATIONS.some(location => 
-    oldRoles.has(CATEGORY_ROLES[location.toLowerCase()].roleId)
-  );
-  const hasAnyCategoryRole = LOCATIONS.some(location => 
-    newRoles.has(CATEGORY_ROLES[location.toLowerCase()].roleId)
-  );
-  
-  if (hadAnyCategoryRole !== hasAnyCategoryRole) {
-    await updateStarterChannelVisibility(newMember.guild, newMember.id);
-  }
+      // Deshabilitar solo el botón de subir video
+      const row = ActionRowBuilder.from(message.components[0]);
+      const uploadButton = row.components.find(c => c.data.custom_id === "upload_video");
+      uploadButton.setDisabled(true);
+      await message.edit({ components: [row] });
 
-  // Revisar cambios en roles por categoría y actualizar los mensajes correspondientes 
-  for (const location of LOCATIONS) {
-    const roleId = CATEGORY_ROLES[location.toLowerCase()].roleId;
-    const hadRole = oldRoles.has(roleId);
-    const hasRole = newRoles.has(roleId);
+      await interaction.reply({
+        content: "Por favor, sube el video de la tarea completada (tienes 5 minutos).",
+        flags: [1 << 6]
+      });
 
-    // Si hubo cambio en este rol específico
-    if (hadRole !== hasRole) {
-      console.log(`Cambio en rol de ${location}: ${hadRole} -> ${hasRole}`);
       try {
-        const categoryId = CATEGORY_ROLES[location.toLowerCase()].categoryId;
-        const category = await newMember.guild.channels.fetch(categoryId);
-        if (category) {
-          const assignmentChannel = category.children.cache.find(
-            (channel) => channel.name === "asignacion-tareas"
-          );
-          if (assignmentChannel) {
-            console.log(`Actualizando mensaje de asignación en ${location}...`);
-            await updateAssignmentMessage(assignmentChannel);
-          }
+        const filter = (m) => {
+          // Verificar que es un video del usuario correcto
+          return m.author.id === interaction.user.id && 
+                 m.attachments.size > 0 && 
+                 m.attachments.first().contentType?.startsWith("video/");
+        };
+
+        const collected = await interaction.channel.awaitMessages({
+          filter,
+          max: 1,
+          time: 300000, // 5 minutos
+          errors: ["time"]
+        });
+
+        const videoMessage = collected.first();
+        const video = videoMessage.attachments.first();
+
+        // Calcular la duración
+        const endTime = Date.now();
+        const duration = endTime - startTime;
+        const durationObj = {
+          hours: Math.floor(duration / (1000 * 60 * 60)),
+          minutes: Math.floor((duration % (1000 * 60 * 60)) / (1000 * 60)),
+          seconds: Math.floor((duration % (1000 * 60)) / 1000)
+        };
+
+        // Enviar el video al canal de confirmación
+        const confirmationMessage = await sendVideoConfirmation(
+          video,
+          interaction,
+          message,
+          durationObj
+        );
+
+        // Actualizar el embed original para mostrar que está completada
+        const originalEmbed = message.embeds[0];
+        const completedEmbed = new EmbedBuilder()
+          .setColor(0x00FF00)
+          .setTitle("✅ Tarea Completada")
+          .setDescription(originalEmbed.description)
+          .addFields([
+            {
+              name: "Duración",
+              value: `${durationObj.hours}h ${durationObj.minutes}m ${durationObj.seconds}s`,
+              inline: true
+            }
+          ])
+          .setTimestamp();
+
+        // Actualizar el mensaje original sin botones
+        await message.edit({
+          embeds: [completedEmbed],
+          components: [] // Eliminar botones al completar
+        });
+
+        // Enviar mensaje al canal de registro
+        const registroChannel = interaction.channel.parent.children.cache.find(
+          ch => ch.name === "registro-tareas"
+        );
+
+        if (registroChannel) {
+          const registroEmbed = new EmbedBuilder()
+            .setColor(0x00FF00)
+            .setTitle("Tarea Completada")
+            .setDescription(`El usuario ${interaction.user} ha completado la tarea:\n**${originalEmbed.description}**`)
+            .addFields([
+              { 
+                name: "Enlace a la tarea", 
+                value: `[Ver tarea](${message.url})` 
+              },
+              {
+                name: "Duración",
+                value: `${durationObj.hours}h ${durationObj.minutes}m ${durationObj.seconds}s`
+              },
+              {
+                name: "Video",
+                value: `[Ver video](${confirmationMessage.url})`
+              }
+            ])
+            .setTimestamp();
+
+          await registroChannel.send({ embeds: [registroEmbed] });
         }
+
+        // Eliminar el mensaje con el video
+        await videoMessage.delete();
+
+        await interaction.followUp({
+          content: "¡Video subido correctamente! La tarea ha sido marcada como completada.",
+          flags: [1 << 6]
+        });
+
       } catch (error) {
-        console.error(`Error al actualizar mensaje de asignación para ${location}:`, error);
+        // Si es error de timeout o cualquier otro error
+        console.error("Error al procesar el video:", error);
+        
+        // Reactivar el botón de subir video
+        const row = ActionRowBuilder.from(message.components[0]);
+        const uploadButton = row.components.find(c => c.data.custom_id === "upload_video");
+        uploadButton.setDisabled(false);
+        await message.edit({ components: [row] });
+
+        if (error.code === "INTERACTION_COLLECTOR_ERROR") {
+          await interaction.followUp({
+            content: "Se acabó el tiempo para subir el video. Puedes intentarlo nuevamente volviendo a pulsar en \"Subir video\".",
+            flags: [1 << 6]
+          });
+        } else {
+          await interaction.followUp({
+            content: "Hubo un error al procesar el video. Puedes intentarlo nuevamente.",
+            flags: [1 << 6]
+          });
+        }
+      }
+    } catch (error) {
+      console.error("Error al procesar la subida:", error);
+      await interaction.reply({
+        content: "Hubo un error al procesar la subida. Puedes intentarlo nuevamente.",
+        flags: [1 << 6]
+      });
+
+      // Asegurarnos de reactivar el botón en caso de error
+      try {
+        const row = ActionRowBuilder.from(interaction.message.components[0]);
+        const uploadButton = row.components.find(c => c.data.custom_id === "upload_video");
+        uploadButton.setDisabled(false);
+        await interaction.message.edit({ components: [row] });
+      } catch (err) {
+        console.error("Error al reactivar el botón:", err);
       }
     }
   }
-}); 
+});
 
 client.login(process.env.DISCORD_BOT_TOKEN);
