@@ -14,11 +14,11 @@ const {
   TextInputBuilder,
   TextInputStyle,
   ModalBuilder,
+  PermissionFlagsBits
 } = require("discord.js");
 
 // Constantes de configuración
 const LOCATIONS = ["Calpe", "Granada", "Malaga", "Sevilla", "Cambrils"];
-const VIDEO_CHANNEL_ID = "1354734580589924416";
 const STARTER_CHANNELS = [
   "1354754019737862307", // Calpe
   "1354757348199239704", // Granada
@@ -448,8 +448,13 @@ async function toggleUploadButtons(channel, userId, disable = true) {
 
 // Función para enviar video al canal de confirmación
 async function sendVideoConfirmation(video, interaction, message, duration) {
-  const videoChannel = await client.channels.fetch(VIDEO_CHANNEL_ID);
-  if (!videoChannel) throw new Error("No se encontró el canal de videos");
+  // Obtener la categoría del mensaje original
+  const category = message.channel.parent;
+  if (!category) throw new Error("No se pudo determinar la categoría del mensaje");
+
+  // Buscar el canal de videos en la misma categoría
+  const videoChannel = category.children.cache.find(ch => ch.name === "videos-tareas");
+  if (!videoChannel) throw new Error("No se encontró el canal de videos en esta categoría");
 
   const { hours, minutes, seconds } = duration;
   const originalEmbed = message.embeds[0];
@@ -531,11 +536,12 @@ client.once("ready", async () => {
     
     console.log("Categorías con starter channels:", categoryIds);
 
-    // Buscar el canal "asignacion-tareas" en cada categoría
+    // Buscar el canal "asignacion-tareas" y "videos-tareas" en cada categoría
     for (const categoryId of categoryIds) {
       const category = await client.channels.fetch(categoryId);
       console.log(`Buscando en categoría: ${category.name}`);
       
+      // Verificar canal de asignación
       const assignmentChannel = category.children.cache.find(
         channel => channel.name === "asignacion-tareas"
       );
@@ -545,6 +551,33 @@ client.once("ready", async () => {
         await setupAssignmentChannel(assignmentChannel);
       } else {
         console.log(`No se encontró canal de asignación en categoría ${category.name}`);
+      }
+
+      // Verificar canal de videos
+      const videosChannel = category.children.cache.find(
+        channel => channel.name === "videos-tareas"
+      );
+
+      if (!videosChannel) {
+        console.log(`Creando canal de videos en categoría ${category.name}...`);
+        try {
+          await category.children.create({
+            name: "videos-tareas",
+            type: ChannelType.GuildText,
+            permissionOverwrites: [
+              {
+                id: category.guild.roles.everyone.id,
+                allow: [PermissionFlagsBits.ViewChannel],
+                deny: [PermissionFlagsBits.SendMessages]
+              }
+            ]
+          });
+          console.log(`Canal de videos creado en categoría ${category.name}`);
+        } catch (error) {
+          console.error(`Error al crear canal de videos en categoría ${category.name}:`, error);
+        }
+      } else {
+        console.log(`Canal de videos ya existe en categoría ${category.name}`);
       }
     }
   } catch (error) {
@@ -807,27 +840,32 @@ client.on("interactionCreate", async (interaction) => {
     });
 
     try {
-      const filter = (m) =>
-        m.author.id === interaction.user.id && m.attachments.size > 0;
+      const filter = (m) => {
+        if (m.author.id === interaction.user.id && m.attachments.size > 0) {
+          const attachment = m.attachments.first();
+          if (!attachment.contentType?.startsWith("video/")) {
+            // Si no es un video, enviar mensaje y eliminar el archivo
+            interaction.followUp({
+              content: "Debes asegurarte que el envío sea un video, inténtalo de nuevo",
+              flags: [1 << 6]
+            });
+            m.delete().catch(console.error);
+            return false;
+          }
+          return true;
+        }
+        return false;
+      };
+
       const collected = await interaction.channel.awaitMessages({
         filter,
         max: 1,
-        time: 300000, // 5 minutos para subir el video
-        errors: ["time"],
+        time: 5000, // 5 segundos
+        errors: ["time"]
       });
 
       const message = collected.first();
       const attachment = message.attachments.first();
-
-      if (!attachment.contentType?.startsWith("video/")) {
-        await interaction.followUp({
-          content: "Por favor, sube un archivo de video válido.",
-          flags: [1 << 6],
-        });
-        // Reactivar los botones si el archivo no es válido
-        await toggleUploadButtons(interaction.channel, interaction.user.id, false);
-        return;
-      }
 
       const currentDate = new Date();
       const formattedDate = currentDate.toLocaleString("es-ES", {
@@ -1227,10 +1265,20 @@ client.on("interactionCreate", async (interaction) => {
 
       try {
         const filter = (m) => {
-          // Verificar que es un video del usuario correcto
-          return m.author.id === interaction.user.id && 
-                 m.attachments.size > 0 && 
-                 m.attachments.first().contentType?.startsWith("video/");
+          if (m.author.id === interaction.user.id && m.attachments.size > 0) {
+            const attachment = m.attachments.first();
+            if (!attachment.contentType?.startsWith("video/")) {
+              // Si no es un video, enviar mensaje y eliminar el archivo
+              interaction.followUp({
+                content: "Debes asegurarte que el envío sea un video, inténtalo de nuevo",
+                flags: [1 << 6]
+              });
+              m.delete().catch(console.error);
+              return false;
+            }
+            return true;
+          }
+          return false;
         };
 
         const collected = await interaction.channel.awaitMessages({
@@ -1252,72 +1300,100 @@ client.on("interactionCreate", async (interaction) => {
           seconds: Math.floor((duration % (1000 * 60)) / 1000)
         };
 
-        // Enviar el video al canal de confirmación
-        const confirmationMessage = await sendVideoConfirmation(
-          video,
-          interaction,
-          message,
-          durationObj
+        // Bloquear TODOS los botones inmediatamente después de recibir el video
+        const disabledRow = new ActionRowBuilder().addComponents(
+          message.components[0].components.map(button => 
+            ButtonBuilder.from(button).setDisabled(true)
+          )
         );
+        await message.edit({ components: [disabledRow] });
 
-        // Actualizar el embed original para mostrar que está completada
-        const originalEmbed = message.embeds[0];
-        const completedEmbed = new EmbedBuilder()
-          .setColor(0x00FF00)
-          .setTitle("✅ Tarea Completada")
-          .setDescription(originalEmbed.description)
-          .addFields([
-            {
-              name: "Duración",
-              value: `${durationObj.hours}h ${durationObj.minutes}m ${durationObj.seconds}s`,
-              inline: true
-            }
-          ])
-          .setTimestamp();
-
-        // Actualizar el mensaje original sin botones
-        await message.edit({
-          embeds: [completedEmbed],
-          components: [] // Eliminar botones al completar
+        // Notificar al usuario que estamos procesando su video
+        await interaction.followUp({
+          content: "Video recibido, procesando...",
+          flags: [1 << 6]
         });
 
-        // Enviar mensaje al canal de registro
-        const registroChannel = interaction.channel.parent.children.cache.find(
-          ch => ch.name === "registro-tareas"
-        );
+        try {
+          // Enviar el video al canal de confirmación
+          const confirmationMessage = await sendVideoConfirmation(
+            video,
+            interaction,
+            message,
+            durationObj
+          );
 
-        if (registroChannel) {
-          const registroEmbed = new EmbedBuilder()
+          // Actualizar el embed original para mostrar que está completada
+          const originalEmbed = message.embeds[0];
+          const completedEmbed = new EmbedBuilder()
             .setColor(0x00FF00)
-            .setTitle("Tarea Completada")
-            .setDescription(`El usuario ${interaction.user} ha completado la tarea:\n**${originalEmbed.description}**`)
+            .setTitle("✅ Tarea Completada")
+            .setDescription(originalEmbed.description)
             .addFields([
-              { 
-                name: "Enlace a la tarea", 
-                value: `[Ver tarea](${message.url})` 
-              },
               {
                 name: "Duración",
-                value: `${durationObj.hours}h ${durationObj.minutes}m ${durationObj.seconds}s`
-              },
-              {
-                name: "Video",
-                value: `[Ver video](${confirmationMessage.url})`
+                value: `${durationObj.hours}h ${durationObj.minutes}m ${durationObj.seconds}s`,
+                inline: true
               }
             ])
             .setTimestamp();
 
-          await registroChannel.send({ embeds: [registroEmbed] });
+          // Actualizar el mensaje original sin botones
+          await message.edit({
+            embeds: [completedEmbed],
+            components: [] // Eliminar botones al completar
+          });
+
+          // Enviar mensaje al canal de registro
+          const registroChannel = interaction.channel.parent.children.cache.find(
+            ch => ch.name === "registro-tareas"
+          );
+
+          if (registroChannel) {
+            const registroEmbed = new EmbedBuilder()
+              .setColor(0x00FF00)
+              .setTitle("Tarea Completada")
+              .setDescription(`El usuario ${interaction.user} ha completado la tarea:\n**${originalEmbed.description}**`)
+              .addFields([
+                { 
+                  name: "Enlace a la tarea", 
+                  value: `[Ver tarea](${message.url})` 
+                },
+                {
+                  name: "Duración",
+                  value: `${durationObj.hours}h ${durationObj.minutes}m ${durationObj.seconds}s`
+                },
+                {
+                  name: "Video",
+                  value: `[Ver video](${confirmationMessage.url})`
+                }
+              ])
+              .setTimestamp();
+
+            await registroChannel.send({ embeds: [registroEmbed] });
+          }
+
+          // Eliminar el mensaje con el video
+          await videoMessage.delete();
+
+          await interaction.followUp({
+            content: "¡Video subido correctamente! La tarea ha sido marcada como completada.",
+            flags: [1 << 6]
+          });
+
+        } catch (error) {
+          console.error("Error al procesar el video en el canal de confirmación:", error);
+          // Si hay error al procesar, reactivar solo el botón de subir
+          const row = ActionRowBuilder.from(message.components[0]);
+          const uploadButton = row.components.find(c => c.data.custom_id === "upload_video");
+          uploadButton.setDisabled(false);
+          await message.edit({ components: [row] });
+
+          await interaction.followUp({
+            content: "Hubo un error al procesar el video. Por favor, intenta nuevamente.",
+            flags: [1 << 6]
+          });
         }
-
-        // Eliminar el mensaje con el video
-        await videoMessage.delete();
-
-        await interaction.followUp({
-          content: "¡Video subido correctamente! La tarea ha sido marcada como completada.",
-          flags: [1 << 6]
-        });
-
       } catch (error) {
         // Si es error de timeout o cualquier otro error
         console.error("Error al procesar el video:", error);
