@@ -1309,10 +1309,10 @@ client.on("interactionCreate", async (interaction) => {
         await message.edit({ components: [disabledRow] });
 
         // Notificar al usuario que estamos procesando su video
-        await interaction.followUp({
-          
+        /* await interaction.followUp({
+          content: "Procesando Video...",
           flags: [1 << 6]
-        });
+        }); */
 
         try {
           // Enviar el video al canal de confirmación
