@@ -1310,7 +1310,7 @@ client.on("interactionCreate", async (interaction) => {
 
         // Notificar al usuario que estamos procesando su video
         await interaction.followUp({
-          content: "Video recibido, procesando...",
+          
           flags: [1 << 6]
         });
 
