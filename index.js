@@ -283,7 +283,6 @@ async function updateAssignmentMessage(channel, selectedUserId = null) {
         msg.components[0].components[0]?.data?.custom_id === "select_user_task"
     );
 
-    // Si no se proporciona un selectedUserId pero existe un mensaje con una selección
     if (!selectedUserId && existingMessage) {
       const currentSelect = existingMessage.components[0].components[0];
       selectedUserId = currentSelect.options.find(opt => opt.default)?.value;
@@ -453,7 +452,10 @@ async function sendVideoConfirmation(video, interaction, message, duration) {
   if (!category) throw new Error("No se pudo determinar la categoría del mensaje");
 
   // Buscar el canal de videos en la misma categoría
-  const videoChannel = category.children.cache.find(ch => ch.name === "videos-tareas");
+  const videoChannel = category.children.cache.find(
+    ch => ch.name === "videos-tareas"
+  );
+
   if (!videoChannel) throw new Error("No se encontró el canal de videos en esta categoría");
 
   const { hours, minutes, seconds } = duration;
@@ -860,7 +862,7 @@ client.on("interactionCreate", async (interaction) => {
       const collected = await interaction.channel.awaitMessages({
         filter,
         max: 1,
-        time: 5000, // 5 segundos
+        time: 300000, // 5 minutos
         errors: ["time"]
       });
 
@@ -1395,23 +1397,21 @@ client.on("interactionCreate", async (interaction) => {
           });
         }
       } catch (error) {
-        // Si es error de timeout o cualquier otro error
-        console.error("Error al procesar el video:", error);
-        
         // Reactivar el botón de subir video
         const row = ActionRowBuilder.from(message.components[0]);
         const uploadButton = row.components.find(c => c.data.custom_id === "upload_video");
         uploadButton.setDisabled(false);
         await message.edit({ components: [row] });
 
-        if (error.code === "INTERACTION_COLLECTOR_ERROR") {
+        // Verificar si es una colección vacía (timeout)
+        if (error instanceof Map && error.size === 0) {
           await interaction.followUp({
-            content: "Se acabó el tiempo para subir el video. Puedes intentarlo nuevamente volviendo a pulsar en \"Subir video\".",
+            content: 'Se acabó el tiempo para subir el video. Puedes intentarlo nuevamente volviendo a pulsar en "Subir video".',
             flags: [1 << 6]
           });
         } else {
           await interaction.followUp({
-            content: "Hubo un error al procesar el video. Puedes intentarlo nuevamente.",
+            content: "Hubo un error al procesar el video. Por favor, intenta nuevamente.",
             flags: [1 << 6]
           });
         }
