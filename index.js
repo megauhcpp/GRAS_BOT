@@ -28,6 +28,7 @@ const {
   setupAssignmentChannel,
   updateAssignmentMessage,
 } = require("./src/services/setupService");
+const { initializeRequiredChannels } = require("./src/services/initializationService");
 
 const client = new Client({
   intents: [
@@ -42,7 +43,17 @@ const client = new Client({
 });
 
 client.once("ready", async () => {
-  console.log(`Bot conectado como ${client.user.tag}`);
+  console.log(`Bot está listo! Conectado como ${client.user.tag}`);
+  
+  // Inicializar canales en todos los servidores donde está el bot
+  for (const guild of client.guilds.cache.values()) {
+    try {
+      await initializeRequiredChannels(guild);
+      console.log(`Canales inicializados correctamente en el servidor: ${guild.name}`);
+    } catch (error) {
+      console.error(`Error al inicializar canales en el servidor ${guild.name}:`, error);
+    }
+  }
 
   const guild = client.guilds.cache.first();
   if (!guild) return;

@@ -1,33 +1,24 @@
 // Constantes de configuración
-const LOCATIONS = ["Calpe", "Granada", "Malaga", "Sevilla", "Cambrils"];
+const LOCATIONS = ["Calpe", "Malaga"];
 const STARTER_CHANNELS = [
-  "1354754019737862307", // Calpe
-  "1354757348199239704", // Granada
-  "1354757370676248596", // Malaga
-  "1355112644952199229", // Sevilla
-  "1355160490179035236", // Cambrils
+  "1356275625895395443 ", // Calpe
+  "1356275684107878421 ", // Malaga
 ];
+
+const REQUIRED_CHANNELS = {
+  TASK_ASSIGNMENT: "asignacion-tareas",
+  TASK_REGISTRY: "registro-tareas",
+  TASK_VIDEOS: "videos-tareas"
+};
 
 const CATEGORY_ROLES = {
   calpe: {
-    categoryId: "1354752551136006175",
-    roleId: "1354813657544134839",
-  },
-  granada: {
-    categoryId: "1354752582421057630",
-    roleId: "1354813856861655230",
+    categoryId: "1356275547084423416",
+    roleId: "1356275337679470803",
   },
   malaga: {
-    categoryId: "1354752621088604292",
-    roleId: "1354813912335388865",
-  },
-  sevilla: {
-    categoryId: "1355112568850743427",
-    roleId: "1355112904076300389",
-  },
-  cambrils: {
-    categoryId: "1355160400856879104",
-    roleId: "1355160575058907357",
+    categoryId: "1356275584015143022",
+    roleId: "1356275439378891035",
   },
 };
 
@@ -35,4 +26,5 @@ module.exports = {
   LOCATIONS,
   STARTER_CHANNELS,
   CATEGORY_ROLES,
+  REQUIRED_CHANNELS,
 };

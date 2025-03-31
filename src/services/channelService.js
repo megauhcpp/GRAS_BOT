@@ -1,4 +1,4 @@
-const { ChannelType, PermissionsBitField } = require("discord.js");
+const { ChannelType, PermissionsBitField, PermissionFlagsBits } = require("discord.js");
 const {
   LOCATIONS,
   STARTER_CHANNELS,
@@ -89,60 +89,36 @@ async function assignRandomStarterChannel(userId, guild) {
 async function updateStarterChannelVisibility(guild, userId) {
   try {
     const member = await guild.members.fetch(userId);
+    if (!member) {
+      console.log(`No se encontró el miembro ${userId}`);
+      return;
+    }
 
-    // Para cada starter channel
-    for (let i = 0; i < STARTER_CHANNELS.length; i++) {
-      try {
-        const channel = await guild.client.channels.fetch(STARTER_CHANNELS[i]);
-        if (channel) {
-          const categoryName = LOCATIONS[i];
-          const roleId = CATEGORY_ROLES[categoryName.toLowerCase()].roleId;
+    // Obtener los roles del usuario
+    const userRoles = member.roles.cache;
 
-          // Verificar si el usuario tiene el rol de esta categoría
-          const hasRole = member.roles.cache.has(roleId);
+    // Iterar sobre las categorías y sus roles
+    for (const [location, { roleId }] of Object.entries(CATEGORY_ROLES)) {
+      const hasRole = userRoles.has(roleId);
+      
+      // Buscar el canal starter correspondiente
+      const starterChannel = guild.channels.cache.find(
+        channel => channel.name.toLowerCase() === location.toLowerCase()
+      );
 
-          if (!hasRole) {
-            // Si no tiene el rol, no debería ver ningún canal
-            await channel.permissionOverwrites.edit(userId, {
-              ViewChannel: false,
-            });
-            continue;
-          }
-
-          // Verificar si tiene un canal específico en esta categoría
-          const hasSpecificChannel = hasChannelInCategory(
-            guild,
-            member.user.username,
-            userId,
-            categoryName
-          );
-
-          // Si tiene el rol:
-          // - Si NO tiene canal específico -> mostrar el canal de tareas
-          // - Si tiene canal específico -> ocultar el canal de tareas
-          await channel.permissionOverwrites.edit(userId, {
-            ViewChannel: !hasSpecificChannel,
+      if (starterChannel) {
+        try {
+          // Actualizar los permisos del canal
+          await starterChannel.permissionOverwrites.edit(userId, {
+            ViewChannel: !hasRole, // Ocultar si tiene el rol, mostrar si no lo tiene
           });
-
-          console.log(`Visibilidad actualizada para ${
-            member.user.username
-          } en ${categoryName}:
-            - Tiene rol: ${hasRole}
-            - Tiene canal específico: ${hasSpecificChannel}
-            - Puede ver canal de tareas: ${!hasSpecificChannel}`);
+        } catch (error) {
+          console.error(`Error al configurar el canal ${starterChannel.name}:`, error);
         }
-      } catch (error) {
-        console.error(
-          `Error al configurar el canal ${STARTER_CHANNELS[i]}:`,
-          error
-        );
       }
     }
   } catch (error) {
-    console.error(
-      `Error al actualizar visibilidad de canales para usuario ${userId}:`,
-      error
-    );
+    console.error("Error al actualizar visibilidad de canales:", error);
   }
 }
 
