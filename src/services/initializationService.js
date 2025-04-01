@@ -1,5 +1,5 @@
 const { ChannelType, PermissionFlagsBits } = require("discord.js");
-const { REQUIRED_CHANNELS, CATEGORY_ROLES } = require("../config/constants");
+const { LOCATIONS, CATEGORY_ROLES, REQUIRED_CHANNELS } = require("../config/constants");
 const { 
   setupAssignmentChannel, 
   setupRegistryChannel, 
@@ -7,19 +7,13 @@ const {
 } = require("./setupService");
 
 async function initializeRequiredChannels(guild) {
-  console.log(`Iniciando verificación de canales requeridos en el servidor ${guild.name}`);
-
   try {
-    // Obtener todas las categorías del servidor
-    const categories = Object.entries(CATEGORY_ROLES).map(([location, data]) => ({
-      location,
-      category: guild.channels.cache.get(data.categoryId),
-      roleId: data.roleId
-    }));
+    for (const location of LOCATIONS) {
+      const { categoryId, roleId, adminRoleId } = CATEGORY_ROLES[location.toLowerCase()];
+      const category = guild.channels.cache.get(categoryId);
 
-    for (const { location, category, roleId } of categories) {
       if (!category) {
-        console.log(`No se encontró la categoría ${location}`);
+        console.error(`No se encontró la categoría ${location}`);
         continue;
       }
 
@@ -39,6 +33,15 @@ async function initializeRequiredChannels(guild) {
           ],
         },
         {
+          id: adminRoleId,
+          allow: [
+            PermissionFlagsBits.ViewChannel,
+            PermissionFlagsBits.ReadMessageHistory,
+            PermissionFlagsBits.SendMessages,
+            PermissionFlagsBits.ManageMessages,
+          ],
+        },
+        {
           id: guild.client.user.id,
           allow: [
             PermissionFlagsBits.ViewChannel,
@@ -49,7 +52,7 @@ async function initializeRequiredChannels(guild) {
         },
       ];
 
-      // Configuración de permisos para los otros canales (inicialmente ocultos para todos excepto el bot)
+      // Configuración de permisos para los otros canales (inicialmente ocultos para todos excepto el bot y admins)
       const restrictedPermissions = [
         {
           id: guild.roles.everyone.id,
@@ -60,6 +63,15 @@ async function initializeRequiredChannels(guild) {
           deny: [PermissionFlagsBits.ViewChannel], // Denegar vista al rol de la categoría
         },
         {
+          id: adminRoleId,
+          allow: [
+            PermissionFlagsBits.ViewChannel,
+            PermissionFlagsBits.ReadMessageHistory,
+            PermissionFlagsBits.SendMessages,
+            PermissionFlagsBits.ManageMessages,
+          ],
+        },
+        {
           id: guild.client.user.id,
           allow: [
             PermissionFlagsBits.ViewChannel,
@@ -70,86 +82,100 @@ async function initializeRequiredChannels(guild) {
         },
       ];
 
-      // Verificar y crear canal starter
-      let starterChannel = category.children.cache.find(
-        channel => channel.name === REQUIRED_CHANNELS.STARTER
-      );
+      // Verificar y crear canales requeridos
+      for (const channelName of Object.values(REQUIRED_CHANNELS)) {
+        const existingChannel = category.children.cache.find(
+          (ch) => ch.name === channelName
+        );
 
-      if (!starterChannel) {
-        console.log(`Creando canal starter en ${location}...`);
-        starterChannel = await guild.channels.create({
-          name: REQUIRED_CHANNELS.STARTER,
-          type: ChannelType.GuildText,
-          parent: category.id,
-          permissionOverwrites: starterPermissions,
-        });
-        await setupStarterChannel(starterChannel);
-      } else {
-        await starterChannel.permissionOverwrites.set(starterPermissions);
+        if (!existingChannel) {
+          console.log(`Creando canal ${channelName} en ${location}`);
+          const newChannel = await category.children.create({
+            name: channelName,
+            type: ChannelType.GuildText,
+            permissionOverwrites:
+              channelName === REQUIRED_CHANNELS.STARTER
+                ? starterPermissions
+                : restrictedPermissions,
+          });
+
+          if (channelName === REQUIRED_CHANNELS.TASK_ASSIGNMENT) {
+            await setupAssignmentChannel(newChannel);
+          } else if (channelName === REQUIRED_CHANNELS.TASK_REGISTRY) {
+            await setupRegistryChannel(newChannel);
+          } else if (channelName === REQUIRED_CHANNELS.TASK_VIDEOS) {
+            await setupVideosChannel(newChannel);
+          }
+        } else {
+          console.log(`Actualizando permisos de ${channelName} en ${location}`);
+          await existingChannel.permissionOverwrites.set(
+            channelName === REQUIRED_CHANNELS.STARTER
+              ? starterPermissions
+              : restrictedPermissions
+          );
+
+          if (channelName === REQUIRED_CHANNELS.TASK_ASSIGNMENT) {
+            await setupAssignmentChannel(existingChannel);
+          } else if (channelName === REQUIRED_CHANNELS.TASK_REGISTRY) {
+            await setupRegistryChannel(existingChannel);
+          } else if (channelName === REQUIRED_CHANNELS.TASK_VIDEOS) {
+            await setupVideosChannel(existingChannel);
+          }
+        }
       }
 
-      // Verificar y crear canal de asignación de tareas
-      let assignmentChannel = category.children.cache.find(
-        channel => channel.name === REQUIRED_CHANNELS.TASK_ASSIGNMENT
+      // Verificar y actualizar permisos de canales de usuario existentes
+      const userChannels = category.children.cache.filter(
+        (ch) =>
+          !Object.values(REQUIRED_CHANNELS).includes(ch.name) &&
+          ch.type === ChannelType.GuildText
       );
 
-      if (!assignmentChannel) {
-        console.log(`Creando canal de asignación de tareas en ${location}...`);
-        assignmentChannel = await guild.channels.create({
-          name: REQUIRED_CHANNELS.TASK_ASSIGNMENT,
-          type: ChannelType.GuildText,
-          parent: category.id,
-          permissionOverwrites: restrictedPermissions,
-        });
-        await setupAssignmentChannel(assignmentChannel);
-      } else {
-        await assignmentChannel.permissionOverwrites.set(restrictedPermissions);
-        await setupAssignmentChannel(assignmentChannel);
-      }
+      for (const [, channel] of userChannels) {
+        console.log(`Actualizando permisos de canal de usuario ${channel.name} en ${location}`);
+        const member = guild.members.cache.find(m => channel.name.includes(m.user.username.toLowerCase()));
+        
+        if (member) {
+          const userPermissions = [
+            {
+              id: guild.roles.everyone.id,
+              deny: [PermissionFlagsBits.ViewChannel],
+            },
+            {
+              id: member.id,
+              allow: [
+                PermissionFlagsBits.ViewChannel,
+                PermissionFlagsBits.ReadMessageHistory,
+                PermissionFlagsBits.SendMessages,
+                PermissionFlagsBits.AttachFiles,
+              ],
+            },
+            {
+              id: adminRoleId,
+              allow: [
+                PermissionFlagsBits.ViewChannel,
+                PermissionFlagsBits.ReadMessageHistory,
+                PermissionFlagsBits.SendMessages,
+                PermissionFlagsBits.ManageMessages,
+              ],
+            },
+            {
+              id: guild.client.user.id,
+              allow: [
+                PermissionFlagsBits.ViewChannel,
+                PermissionFlagsBits.SendMessages,
+                PermissionFlagsBits.ManageChannels,
+                PermissionFlagsBits.ManageMessages,
+              ],
+            },
+          ];
 
-      // Verificar y crear canal de registro de tareas
-      let registryChannel = category.children.cache.find(
-        channel => channel.name === REQUIRED_CHANNELS.TASK_REGISTRY
-      );
-
-      if (!registryChannel) {
-        console.log(`Creando canal de registro de tareas en ${location}...`);
-        registryChannel = await guild.channels.create({
-          name: REQUIRED_CHANNELS.TASK_REGISTRY,
-          type: ChannelType.GuildText,
-          parent: category.id,
-          permissionOverwrites: restrictedPermissions,
-        });
-        await setupRegistryChannel(registryChannel);
-      } else {
-        await registryChannel.permissionOverwrites.set(restrictedPermissions);
-        await setupRegistryChannel(registryChannel);
-      }
-
-      // Verificar y crear canal de videos de tareas
-      let videosChannel = category.children.cache.find(
-        channel => channel.name === REQUIRED_CHANNELS.TASK_VIDEOS
-      );
-
-      if (!videosChannel) {
-        console.log(`Creando canal de videos de tareas en ${location}...`);
-        videosChannel = await guild.channels.create({
-          name: REQUIRED_CHANNELS.TASK_VIDEOS,
-          type: ChannelType.GuildText,
-          parent: category.id,
-          permissionOverwrites: restrictedPermissions,
-        });
-        await setupVideosChannel(videosChannel);
-      } else {
-        await videosChannel.permissionOverwrites.set(restrictedPermissions);
-        await setupVideosChannel(videosChannel);
+          await channel.permissionOverwrites.set(userPermissions);
+        }
       }
     }
-
-    console.log("Verificación de canales completada con éxito");
   } catch (error) {
-    console.error("Error durante la inicialización de canales:", error);
-    throw error;
+    console.error("Error al inicializar canales:", error);
   }
 }
 

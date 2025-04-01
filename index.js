@@ -12,6 +12,9 @@ const {
   CATEGORY_ROLES,
 } = require("./src/config/constants");
 const {
+  verifyAndFixUserPermissions,
+  verifyAndFixAllUsersPermissions,
+  createUserChannel,
   updateStarterChannelVisibility,
   assignRandomStarterChannel,
   updateUserSelectMenu,
@@ -52,118 +55,129 @@ client.once("ready", async () => {
     try {
       await initializeRequiredChannels(guild);
       console.log(`Canales inicializados correctamente en el servidor: ${guild.name}`);
-    } catch (error) {
-      console.error(`Error al inicializar canales en el servidor ${guild.name}:`, error);
-    }
-  }
+      
+      // Verificar y corregir permisos de todos los usuarios
+      await verifyAndFixAllUsersPermissions(guild);
+      console.log(`Permisos de usuarios verificados y corregidos en el servidor: ${guild.name}`);
 
-  const guild = client.guilds.cache.first();
-  if (!guild) return;
+      console.log("Actualizando visibilidad de canales para todos los miembros...");
 
-  console.log("Actualizando visibilidad de canales para todos los miembros...");
+      // Obtener todos los miembros del servidor
+      const members = await guild.members.fetch();
 
-  try {
-    // Obtener todos los miembros del servidor
-    const members = await guild.members.fetch();
-
-    // Actualizar la visibilidad de los canales para cada miembro
-    for (const [memberId, member] of members) {
-      if (!member.user.bot) {
-        await updateStarterChannelVisibility(guild, memberId);
-      }
-    }
-
-    console.log("Visibilidad de canales actualizada correctamente");
-  } catch (error) {
-    console.error("Error al actualizar la visibilidad de los canales:", error);
-  }
-
-  // Configurar los canales iniciales
-  for (const channelId of STARTER_CHANNELS) {
-    try {
-      const channel = await client.channels.fetch(channelId);
-      if (channel) {
-        await setupStarterChannel(channel);
-      }
-    } catch (error) {
-      console.error(`Error al configurar el canal ${channelId}:`, error);
-    }
-  }
-
-  // Configurar los canales de asignación de tareas en todas las categorías con starter channels
-  try {
-    console.log("Buscando canales de asignación de tareas...");
-
-    // Obtener las categorías que tienen starter channels
-    const starterChannels = await Promise.all(
-      STARTER_CHANNELS.map((id) => client.channels.fetch(id))
-    );
-    const categoryIds = [...new Set(starterChannels.map((ch) => ch.parent.id))];
-
-    console.log("Categorías con starter channels:", categoryIds);
-
-    // Buscar el canal "asignacion-tareas" y "videos-tareas" en cada categoría
-    for (const categoryId of categoryIds) {
-      const category = await client.channels.fetch(categoryId);
-      console.log(`Buscando en categoría: ${category.name}`);
-
-      // Verificar canal de asignación
-      const assignmentChannel = category.children.cache.find(
-        (channel) => channel.name === "asignacion-tareas"
-      );
-
-      if (assignmentChannel) {
-        console.log(
-          `Canal de asignación encontrado en categoría ${category.name}, configurando...`
-        );
-        await setupAssignmentChannel(assignmentChannel);
-      } else {
-        console.log(
-          `No se encontró canal de asignación en categoría ${category.name}`
-        );
-      }
-
-      // Verificar canal de videos
-      const videosChannel = category.children.cache.find(
-        (channel) => channel.name === "videos-tareas"
-      );
-
-      if (!videosChannel) {
-        console.log(`Creando canal de videos en categoría ${category.name}...`);
-        try {
-          await category.children.create({
-            name: "videos-tareas",
-            type: ChannelType.GuildText,
-            permissionOverwrites: [
-              {
-                id: category.guild.roles.everyone.id,
-                allow: [PermissionsBitField.Flags.ViewChannel],
-                deny: [PermissionsBitField.Flags.SendMessages],
-              },
-            ],
-          });
-          console.log(`Canal de videos creado en categoría ${category.name}`);
-        } catch (error) {
-          console.error(
-            `Error al crear canal de videos en categoría ${category.name}:`,
-            error
-          );
+      // Actualizar la visibilidad de los canales para cada miembro
+      for (const [memberId, member] of members) {
+        if (!member.user.bot) {
+          await updateStarterChannelVisibility(guild, memberId);
         }
-      } else {
-        console.log(`Canal de videos ya existe en categoría ${category.name}`);
       }
+
+      console.log("Visibilidad de canales actualizada correctamente");
+
+      // Configurar los canales iniciales
+      for (const channelId of STARTER_CHANNELS) {
+        try {
+          const channel = await client.channels.fetch(channelId);
+          if (channel) {
+            await setupStarterChannel(channel);
+          }
+        } catch (error) {
+          console.error(`Error al configurar el canal ${channelId}:`, error);
+        }
+      }
+
+      // Configurar los canales de asignación de tareas en todas las categorías con starter channels
+      try {
+        console.log("Buscando canales de asignación de tareas...");
+
+        // Obtener las categorías que tienen starter channels
+        const starterChannels = await Promise.all(
+          STARTER_CHANNELS.map((id) => client.channels.fetch(id))
+        );
+        const categoryIds = [...new Set(starterChannels.map((ch) => ch.parent.id))];
+
+        console.log("Categorías con starter channels:", categoryIds);
+
+        // Buscar el canal "asignacion-tareas" y "videos-tareas" en cada categoría
+        for (const categoryId of categoryIds) {
+          const category = await client.channels.fetch(categoryId);
+          console.log(`Buscando en categoría: ${category.name}`);
+
+          // Verificar canal de asignación
+          const assignmentChannel = category.children.cache.find(
+            (channel) => channel.name === "asignacion-tareas"
+          );
+
+          if (assignmentChannel) {
+            console.log(
+              `Canal de asignación encontrado en categoría ${category.name}, configurando...`
+            );
+            await setupAssignmentChannel(assignmentChannel);
+          } else {
+            console.log(
+              `No se encontró canal de asignación en categoría ${category.name}`
+            );
+          }
+
+          // Verificar canal de videos
+          const videosChannel = category.children.cache.find(
+            (channel) => channel.name === "videos-tareas"
+          );
+
+          if (!videosChannel) {
+            console.log(`Creando canal de videos en categoría ${category.name}...`);
+            try {
+              await category.children.create({
+                name: "videos-tareas",
+                type: ChannelType.GuildText,
+                permissionOverwrites: [
+                  {
+                    id: category.guild.roles.everyone.id,
+                    allow: [PermissionsBitField.Flags.ViewChannel],
+                    deny: [PermissionsBitField.Flags.SendMessages],
+                  },
+                ],
+              });
+              console.log(`Canal de videos creado en categoría ${category.name}`);
+            } catch (error) {
+              console.error(
+                `Error al crear canal de videos en categoría ${category.name}:`,
+                error
+              );
+            }
+          } else {
+            console.log(`Canal de videos ya existe en categoría ${category.name}`);
+          }
+        }
+      } catch (error) {
+        console.error("Error al configurar los canales de asignación:", error);
+      }
+    } catch (error) {
+      console.error(`Error al inicializar servidor ${guild.name}:`, error);
     }
-  } catch (error) {
-    console.error("Error al configurar los canales de asignación:", error);
   }
 });
 
-// Evento para detectar cambios en roles
+// Manejar cambios en roles de miembros
 client.on("guildMemberUpdate", async (oldMember, newMember) => {
   try {
     // Verificar si hubo cambios en roles de categoría
-    let roleChanged = false;
     const categoryRoleIds = Object.values(CATEGORY_ROLES).map(data => data.roleId);
+    const hadCategoryRole = oldMember.roles.cache.some(role => categoryRoleIds.includes(role.id));
+    const hasCategoryRole = newMember.roles.cache.some(role => categoryRoleIds.includes(role.id));
+
+    if (hadCategoryRole || hasCategoryRole) {
+      // Verificar y corregir permisos en todas las categorías
+      for (const [location, data] of Object.entries(CATEGORY_ROLES)) {
+        const category = newMember.guild.channels.cache.get(data.categoryId);
+        if (category) {
+          await verifyAndFixUserPermissions(newMember, category);
+        }
+      }
+    }
+
+    // Verificar si hubo cambios en roles de categoría
+    let roleChanged = false;
     const categoryRoleIdsSet = new Set(categoryRoleIds);
 
     // Verificar roles removidos
@@ -206,34 +220,25 @@ client.on("guildMemberUpdate", async (oldMember, newMember) => {
   }
 });
 
-// Evento cuando un nuevo miembro se une al servidor
-client.on("guildMemberAdd", async (member) => {
-  if (!member.user.bot) {
-    await assignRandomStarterChannel(member.id, member.guild);
+// Manejar creación de nuevos canales de usuario
+client.on("channelCreate", async (channel) => {
+  if (channel.type === ChannelType.GuildText && channel.parent) {
+    const categoryData = Object.entries(CATEGORY_ROLES).find(
+      ([, data]) => data.categoryId === channel.parent.id
+    );
+    
+    if (categoryData) {
+      const userId = channel.name.split("-").pop();
+      const member = await channel.guild.members.fetch(userId).catch(() => null);
+      
+      if (member) {
+        await verifyAndFixUserPermissions(member, channel.parent);
+      }
+    }
   }
 });
 
-// Evento para detectar cuando se elimina un canal
-client.on("channelDelete", async (channel) => {
-  try {
-    // Solo nos interesa si el canal está en una categoría
-    if (!channel.parent) return;
-
-    // Extraer el ID del usuario del nombre del canal
-    const match = channel.name.match(/tareas-.*-(\d+)$/);
-    if (!match) return;
-
-    const userId = match[1];
-    console.log(`Canal eliminado para usuario ${userId} en categoría ${channel.parent.name}`);
-
-    // Restaurar permisos del usuario
-    await restoreUserPermissions(channel.guild, userId, channel.parent.id);
-  } catch (error) {
-    console.error('Error manejando eliminación de canal:', error);
-  }
-});
-
-// Evento cuando cambian los roles de un miembro
+// Manejar cambios en roles de miembros
 client.on("guildMemberUpdate", async (oldMember, newMember) => {
   try {
     // Verificar si hubo cambios en roles de categoría
@@ -288,6 +293,33 @@ client.on("guildMemberUpdate", async (oldMember, newMember) => {
     }
   } catch (error) {
     console.error("Error al manejar actualización de roles:", error);
+  }
+});
+
+// Evento cuando un nuevo miembro se une al servidor
+client.on("guildMemberAdd", async (member) => {
+  if (!member.user.bot) {
+    await assignRandomStarterChannel(member.id, member.guild);
+  }
+});
+
+// Evento para detectar cuando se elimina un canal
+client.on("channelDelete", async (channel) => {
+  try {
+    // Solo nos interesa si el canal está en una categoría
+    if (!channel.parent) return;
+
+    // Extraer el ID del usuario del nombre del canal
+    const match = channel.name.match(/tareas-.*-(\d+)$/);
+    if (!match) return;
+
+    const userId = match[1];
+    console.log(`Canal eliminado para usuario ${userId} en categoría ${channel.parent.name}`);
+
+    // Restaurar permisos del usuario
+    await restoreUserPermissions(channel.guild, userId, channel.parent.id);
+  } catch (error) {
+    console.error('Error manejando eliminación de canal:', error);
   }
 });
 

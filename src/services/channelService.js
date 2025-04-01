@@ -22,6 +22,11 @@ function getChannelName(username, userId, categoryName) {
   )}-${categoryName.toLowerCase()}-${userId}`;
 }
 
+// Función para normalizar el nombre (quitar tildes y convertir a minúsculas)
+function normalizeString(str) {
+  return str.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
+
 // Función para verificar si un usuario tiene un canal en una categoría
 function hasChannelInCategory(guild, username, userId, categoryName) {
   return guild.channels.cache.some(
@@ -29,6 +34,102 @@ function hasChannelInCategory(guild, username, userId, categoryName) {
       channel.name === getChannelName(username, userId, categoryName) &&
       channel.parent?.name === categoryName
   );
+}
+
+// Función para verificar y corregir los permisos de un usuario en una categoría
+async function verifyAndFixUserPermissions(member, category) {
+  const categoryName = normalizeString(category.name);
+  const categoryData = CATEGORY_ROLES[categoryName];
+  
+  if (!categoryData) {
+    console.error(`No se encontró configuración para la categoría ${category.name}`);
+    return;
+  }
+
+  const { roleId, adminRoleId } = categoryData;
+  const hasRole = member.roles.cache.has(roleId);
+  const isAdmin = member.roles.cache.has(adminRoleId);
+  const starterChannel = category.children.cache.find(ch => ch.name === REQUIRED_CHANNELS.STARTER);
+  const userChannel = category.children.cache.find(ch => ch.name.includes(member.id));
+
+  // Si es admin, debe ver todos los canales
+  if (isAdmin) {
+    if (starterChannel) {
+      await starterChannel.permissionOverwrites.edit(member.id, {
+        ViewChannel: true,
+        ReadMessageHistory: true,
+        SendMessages: true,
+        ManageMessages: true
+      });
+    }
+    if (userChannel) {
+      await userChannel.permissionOverwrites.edit(member.id, {
+        ViewChannel: true,
+        ReadMessageHistory: true,
+        SendMessages: true,
+        ManageMessages: true
+      });
+    }
+    return;
+  }
+
+  // Si no tiene el rol de la categoría, no debería ver ningún canal
+  if (!hasRole) {
+    if (starterChannel) {
+      await starterChannel.permissionOverwrites.edit(member.id, {
+        ViewChannel: false
+      });
+    }
+    if (userChannel) {
+      await userChannel.permissionOverwrites.edit(member.id, {
+        ViewChannel: false
+      });
+    }
+    return;
+  }
+
+  // Si tiene el rol y tiene canal específico, mostrar solo su canal y ocultar el starter
+  if (userChannel) {
+    await userChannel.permissionOverwrites.edit(member.id, {
+      ViewChannel: true,
+      SendMessages: true,
+      ReadMessageHistory: true,
+      AttachFiles: true
+    });
+    
+    if (starterChannel) {
+      await starterChannel.permissionOverwrites.edit(member.id, {
+        ViewChannel: false
+      });
+    }
+  } 
+  // Si tiene el rol pero no tiene canal específico, mostrar solo el starter
+  else if (starterChannel) {
+    await starterChannel.permissionOverwrites.edit(member.id, {
+      ViewChannel: true,
+      ReadMessageHistory: true
+    });
+  }
+}
+
+// Función para verificar y corregir los permisos de todos los usuarios en una categoría
+async function verifyAndFixAllUsersPermissions(guild) {
+  try {
+    const members = await guild.members.fetch();
+    
+    for (const [location, data] of Object.entries(CATEGORY_ROLES)) {
+      const category = guild.channels.cache.get(data.categoryId);
+      if (!category) continue;
+
+      for (const [, member] of members) {
+        if (!member.user.bot) {
+          await verifyAndFixUserPermissions(member, category);
+        }
+      }
+    }
+  } catch (error) {
+    console.error('Error al verificar permisos de usuarios:', error);
+  }
 }
 
 // Función para asignar un starter channel a un usuario según su rol
@@ -298,12 +399,75 @@ async function updateUserSelectMenu(channel) {
   }
 }
 
+// Función para crear un canal de usuario con permisos de administración
+async function createUserChannel(member, category) {
+  const { adminRoleId } = CATEGORY_ROLES[category.name.toLowerCase()];
+  const channelName = `canal-${member.user.username.toLowerCase()}-${member.id}`;
+
+  // Configuración de permisos para el canal del usuario
+  const permissions = [
+    {
+      id: member.guild.roles.everyone.id,
+      deny: [PermissionFlagsBits.ViewChannel],
+    },
+    {
+      id: member.id,
+      allow: [
+        PermissionFlagsBits.ViewChannel,
+        PermissionFlagsBits.SendMessages,
+        PermissionFlagsBits.ReadMessageHistory,
+        PermissionFlagsBits.AttachFiles,
+      ],
+    },
+    {
+      id: adminRoleId,
+      allow: [
+        PermissionFlagsBits.ViewChannel,
+        PermissionFlagsBits.ReadMessageHistory,
+        PermissionFlagsBits.SendMessages,
+        PermissionFlagsBits.ManageMessages,
+      ],
+    },
+    {
+      id: member.guild.client.user.id,
+      allow: [
+        PermissionFlagsBits.ViewChannel,
+        PermissionFlagsBits.SendMessages,
+        PermissionFlagsBits.ManageChannels,
+        PermissionFlagsBits.ManageMessages,
+      ],
+    },
+  ];
+
+  // Crear el canal con los permisos configurados
+  const channel = await category.children.create({
+    name: channelName,
+    permissionOverwrites: permissions,
+  });
+
+  // Ocultar el canal starter ya que ahora tiene su propio canal
+  const starterChannel = category.children.cache.find(
+    (ch) => ch.name === REQUIRED_CHANNELS.STARTER
+  );
+  
+  if (starterChannel) {
+    await starterChannel.permissionOverwrites.edit(member.id, {
+      ViewChannel: false,
+    });
+  }
+
+  return channel;
+}
+
 module.exports = {
   getChannelName,
   hasChannelInCategory,
+  verifyAndFixUserPermissions,
+  verifyAndFixAllUsersPermissions,
   assignRandomStarterChannel,
   updateStarterChannelVisibility,
   updateUserChannelPermissions,
   restoreUserPermissions,
   updateUserSelectMenu,
+  createUserChannel,
 };
