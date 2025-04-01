@@ -250,18 +250,18 @@ async function handleUploadVideoButton(interaction) {
     // Actualizar el mensaje original sin botones
     await message.edit({
       embeds: [completedEmbed],
-      components: [],
+      components: [], // Eliminamos los botones completamente al completar la tarea
     });
 
     try {
       // Enviar el video al canal de videos
       await sendVideoConfirmation(attachment, videoMessage, duration, taskTitle, taskDescription);
       
-      // Notificar éxito al usuario
+      /* // Notificar éxito al usuario
       await interaction.followUp({
         content: "Video recibido correctamente. Un administrador lo revisará pronto.",
         ephemeral: true,
-      });
+      }); */
 
       // Buscar el canal de registro-tareas
       const registroChannel = message.channel.parent.children.cache.find(
@@ -316,7 +316,7 @@ async function handleUploadVideoButton(interaction) {
     } catch (videoError) {
       console.error("Error al procesar el video:", videoError);
       
-      // Reactivar el botón de subir video
+      // Reactivar el botón de subir video solo en caso de error
       try {
         const row = new ActionRowBuilder().addComponents(
           message.components[0].components.map(button => {
@@ -341,7 +341,7 @@ async function handleUploadVideoButton(interaction) {
   } catch (error) {
     console.error("Error al manejar interacción:", error);
 
-    // Reactivar el botón de subir video solo si el mensaje original existe
+    // Reactivar el botón de subir video solo en caso de error
     try {
       if (message?.components?.[0]) {
         const row = new ActionRowBuilder().addComponents(
