@@ -1,5 +1,5 @@
 const { getChannelName } = require("../services/channelService");
-const { sendTaskMessages } = require("../services/taskService");
+const { sendTaskToUserChannel } = require("../services/taskService");
 
 async function handleTaskModal(interaction) {
   console.log("Modal recibido:", interaction.customId);
@@ -46,28 +46,17 @@ async function handleTaskModal(interaction) {
     }
 
     // Enviar la tarea al canal del usuario
-    try {
-      const taskWithDescription = description
-        ? `${task}\n\nDescripción:\n${description}`
-        : task;
-      console.log("Enviando tarea:", taskWithDescription);
-      await sendTaskMessages(user, [taskWithDescription], userChannel);
+    await sendTaskToUserChannel(userChannel, userId, task, description);
 
-      await interaction.reply({
-        content: `Tarea asignada a ${user.username} en ${userChannel}`,
-        flags: [1 << 6],
-      });
-    } catch (error) {
-      console.error("Error detallado al asignar tarea:", error);
-      await interaction.reply({
-        content: `Error al asignar la tarea: ${error.message}`,
-        flags: [1 << 6],
-      });
-    }
-  } catch (error) {
-    console.error("Error al procesar el modal:", error);
+    // Confirmar al administrador
     await interaction.reply({
-      content: `Error al procesar la tarea: ${error.message}`,
+      content: `Tarea asignada a ${user.username} en su canal personal.`,
+      flags: [1 << 6],
+    });
+  } catch (error) {
+    console.error("Error al manejar el modal:", error);
+    await interaction.reply({
+      content: "Hubo un error al asignar la tarea. Por favor, inténtalo de nuevo.",
       flags: [1 << 6],
     });
   }

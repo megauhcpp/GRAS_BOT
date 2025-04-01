@@ -13,6 +13,7 @@ const {
   getChannelName,
   hasChannelInCategory,
   updateStarterChannelVisibility,
+  updateUserChannelPermissions,
 } = require("../services/channelService");
 const {
   sendTaskMessages,
@@ -50,41 +51,42 @@ async function handleCreateChannelButton(interaction) {
   }
 
   try {
-    const newChannel = await interaction.guild.channels.create({
+    // Crear el canal personal
+    const channel = await interaction.guild.channels.create({
       name: channelName,
       type: ChannelType.GuildText,
-      parent: category,
+      parent: category.id,
       permissionOverwrites: [
         {
-          id: interaction.guild.roles.everyone,
+          id: interaction.guild.roles.everyone.id,
           deny: [PermissionsBitField.Flags.ViewChannel],
         },
         {
           id: user.id,
-          allow: [PermissionsBitField.Flags.ViewChannel],
+          allow: [
+            PermissionsBitField.Flags.ViewChannel,
+            PermissionsBitField.Flags.SendMessages,
+            PermissionsBitField.Flags.ReadMessageHistory,
+          ],
         },
       ],
     });
 
-    // Actualizar la visibilidad de los canales para este usuario
-    await updateStarterChannelVisibility(interaction.guild, user.id);
+    // Actualizar permisos para el usuario
+    await updateUserChannelPermissions(interaction.guild, user.id, category.id);
 
-    const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setURL(newChannel.url)
-        .setLabel("Ir al canal")
-        .setStyle(ButtonStyle.Link)
-    );
-
+    // Enviar mensaje de confirmación
     await interaction.reply({
-      content: `Canal creado: ${newChannel}`,
-      components: [row],
+      content: `¡Canal creado! Ve a <#${channel.id}> para ver tus tareas.`,
       flags: [1 << 6],
     });
+
+    // Enviar mensajes iniciales al canal
+    await sendTaskMessages(channel);
   } catch (error) {
     console.error("Error al crear el canal:", error);
     await interaction.reply({
-      content: "Hubo un error al crear el canal.",
+      content: "Hubo un error al crear el canal. Por favor, inténtalo de nuevo.",
       flags: [1 << 6],
     });
   }
@@ -95,6 +97,8 @@ async function handleStartTaskButton(interaction) {
     const messageId = interaction.customId.split("_")[2];
     const message = interaction.message;
     const taskEmbed = message.embeds[0];
+    const taskTitle = taskEmbed.fields?.find(f => f.name === "Tarea")?.value || "Sin título";
+    const taskDescription = taskEmbed.fields?.find(f => f.name === "Descripción")?.value || "Sin descripción";
     const startTime = Date.now();
 
     // Actualizar los botones
@@ -105,7 +109,7 @@ async function handleStartTaskButton(interaction) {
         .setStyle(ButtonStyle.Success)
         .setDisabled(true),
       new ButtonBuilder()
-        .setCustomId("upload_video")
+        .setCustomId(`upload_video_${messageId}_${interaction.user.id}`)
         .setLabel("Subir Video")
         .setStyle(ButtonStyle.Primary)
         .setDisabled(false)
@@ -119,15 +123,18 @@ async function handleStartTaskButton(interaction) {
 
     if (registroChannel) {
       const registroEmbed = new EmbedBuilder()
-        .setColor(0x00ff00)
-        .setTitle("Inicio de Tarea")
-        .setDescription(
-          `El usuario ${interaction.user} ha iniciado la tarea:\n**${taskEmbed.description}**`
-        )
-        .addFields({
-          name: "Enlace a la tarea",
-          value: `[Ver tarea](${message.url})`,
-        })
+        .setColor(0x0099ff)
+        .setTitle(" Inicio de Tarea")
+        .setDescription(`El usuario ${interaction.user} ha iniciado la tarea:`)
+        .addFields([
+          { name: "Tarea", value: taskTitle, inline: false },
+          { name: "Descripción", value: taskDescription, inline: false },
+          {
+            name: "Enlace a la tarea",
+            value: `[Ver tarea](${message.url})`,
+            inline: true,
+          }
+        ])
         .setTimestamp();
 
       await registroChannel.send({ embeds: [registroEmbed] });
@@ -135,7 +142,7 @@ async function handleStartTaskButton(interaction) {
 
     await interaction.reply({
       content: "¡Tarea iniciada! Puedes subir el video cuando la completes.",
-      flags: [1 << 6],
+      ephemeral: true
     });
 
     message.startTime = startTime;
@@ -143,59 +150,63 @@ async function handleStartTaskButton(interaction) {
     console.error("Error al iniciar tarea:", error);
     await interaction.reply({
       content: "Hubo un error al iniciar la tarea.",
-      flags: [1 << 6],
+      ephemeral: true
     });
   }
 }
 
 async function handleUploadVideoButton(interaction) {
-  const message = interaction.message;
-  const startTime = message.startTime;
-
-  if (!startTime) {
+  // Extraer messageId y userId del customId
+  const [, , messageId, userId] = interaction.customId.split("_");
+  
+  // Verificar que el usuario que hace clic es el mismo al que se le asignó la tarea
+  if (interaction.user.id !== userId) {
     await interaction.reply({
-      content: "Debes iniciar la tarea antes de subir el video.",
-      flags: [1 << 6],
+      content: "Solo el usuario asignado puede subir el video de esta tarea.",
+      ephemeral: true
     });
     return;
   }
 
-  // Deshabilitar solo el botón de subir video
-  const row = ActionRowBuilder.from(message.components[0]);
-  const uploadButton = row.components.find(
-    (c) => c.data.custom_id === "upload_video"
-  );
-  uploadButton.setDisabled(true);
-  await message.edit({ components: [row] });
+  const message = interaction.message;
+  const startTime = Date.now();
 
-  await interaction.reply({
-    content:
-      "Por favor, sube el video de la tarea completada (tienes 5 minutos).",
-    flags: [1 << 6],
-  });
+  // Deshabilitar el botón inmediatamente
+  try {
+    const row = new ActionRowBuilder().addComponents(
+      message.components[0].components.map(button => {
+        const newButton = ButtonBuilder.from(button);
+        if (button.data.custom_id?.startsWith('upload_video_')) {
+          newButton.setDisabled(true);
+        }
+        return newButton;
+      })
+    );
+    await message.edit({ components: [row] });
+  } catch (editError) {
+    console.error("Error al deshabilitar botón:", editError);
+    // Si no podemos deshabilitar el botón, no continuamos
+    await interaction.reply({
+      content: "Hubo un error al procesar tu solicitud. Por favor, inténtalo de nuevo.",
+      ephemeral: true
+    });
+    return;
+  }
 
   try {
-    const filter = (m) => {
-      if (m.author.id === interaction.user.id && m.attachments.size > 0) {
-        const attachment = m.attachments.first();
-        if (!attachment.contentType?.startsWith("video/")) {
-          interaction.followUp({
-            content:
-              "Debes asegurarte que el envío sea un video, inténtalo de nuevo",
-            flags: [1 << 6],
-          });
-          m.delete().catch(console.error);
-          return false;
-        }
-        return true;
-      }
-      return false;
-    };
+    await interaction.reply({
+      content:
+        "Por favor, sube el video de tu tarea. Tienes 5 minutos para subirlo.",
+      ephemeral: true,
+    });
 
-    const collected = await interaction.channel.awaitMessages({
+    // Esperar por el video
+    const filter = (m) =>
+      m.author.id === interaction.user.id && m.attachments.size > 0;
+    const collected = await message.channel.awaitMessages({
       filter,
       max: 1,
-      time: 300000, // 5 minutos
+      time: 5 * 60 * 1000,
       errors: ["time"],
     });
 
@@ -213,17 +224,27 @@ async function handleUploadVideoButton(interaction) {
 
     // Actualizar el mensaje original para mostrar que está completada
     const originalEmbed = message.embeds[0];
+    const taskTitle = originalEmbed.fields?.find(f => f.name === "Tarea")?.value || "Sin título";
+    const taskDescription = originalEmbed.fields?.find(f => f.name === "Descripción")?.value || "Sin descripción";
+
     const completedEmbed = new EmbedBuilder()
       .setColor(0x00ff00)
-      .setTitle("✅ Tarea Completada")
-      .setDescription(originalEmbed.description)
+      .setTitle(" Tarea Completada")
       .addFields([
+        { name: "Tarea", value: taskTitle, inline: false },
+        { name: "Descripción", value: taskDescription, inline: false },
         {
           name: "Duración",
           value: `${duration.hours}h ${duration.minutes}m ${duration.seconds}s`,
           inline: true,
         },
+        {
+          name: "Completada por",
+          value: `${interaction.user}`,
+          inline: true,
+        }
       ])
+      .setFooter({ text: "Video enviado al canal de revisión" })
       .setTimestamp();
 
     // Actualizar el mensaje original sin botones
@@ -232,71 +253,124 @@ async function handleUploadVideoButton(interaction) {
       components: [],
     });
 
-    // Enviar el video al canal de videos
-    await sendVideoConfirmation(attachment, interaction, message, duration);
+    try {
+      // Enviar el video al canal de videos
+      await sendVideoConfirmation(attachment, videoMessage, duration, taskTitle, taskDescription);
+      
+      // Notificar éxito al usuario
+      await interaction.followUp({
+        content: "Video recibido correctamente. Un administrador lo revisará pronto.",
+        ephemeral: true,
+      });
 
-    // Buscar el canal de registro-tareas
-    const registroChannel = message.channel.parent.children.cache.find(
-      (ch) => ch.name === "registro-tareas"
-    );
+      // Buscar el canal de registro-tareas
+      const registroChannel = message.channel.parent.children.cache.find(
+        (ch) => ch.name === "registro-tareas"
+      );
 
-    if (registroChannel) {
-      const registroEmbed = new EmbedBuilder()
-        .setColor(0x00ff00)
-        .setTitle("Tarea Completada")
-        .setDescription(`${interaction.user} ha completado una tarea`)
-        .addFields([
-          {
-            name: "Tarea",
-            value: originalEmbed.description,
-            inline: false,
-          },
-          {
-            name: "Duración",
-            value: `${duration.hours}h ${duration.minutes}m ${duration.seconds}s`,
-            inline: true,
-          },
-          {
-            name: "Canal",
-            value: `${message.channel}`,
-            inline: true,
-          },
-        ])
-        .setTimestamp();
+      if (registroChannel) {
+        const registroEmbed = new EmbedBuilder()
+          .setColor(0x00ff00)
+          .setTitle(" Tarea Completada")
+          .setDescription(`${interaction.user} ha completado una tarea`)
+          .addFields([
+            {
+              name: "Tarea",
+              value: taskTitle,
+              inline: false,
+            },
+            {
+              name: "Descripción",
+              value: taskDescription,
+              inline: false,
+            },
+            {
+              name: "Duración",
+              value: `${duration.hours}h ${duration.minutes}m ${duration.seconds}s`,
+              inline: true,
+            },
+            {
+              name: "Canal",
+              value: `${message.channel}`,
+              inline: true,
+            },
+          ])
+          .setTimestamp();
 
-      await registroChannel.send({ embeds: [registroEmbed] });
+        await registroChannel.send({ embeds: [registroEmbed] });
+      }
+
+      // Intentar eliminar el mensaje con el video
+      try {
+        await videoMessage.delete();
+      } catch (deleteError) {
+        console.error("Error al eliminar mensaje de video:", deleteError);
+        // No lanzar error si falla el borrado
+      }
+
+      // Mostrar mensaje de éxito con la duración
+      await interaction.followUp({
+        content: `¡Video subido correctamente! Has completado la tarea en ${duration.hours}h ${duration.minutes}m ${duration.seconds}s.`,
+        ephemeral: true,
+      });
+    } catch (videoError) {
+      console.error("Error al procesar el video:", videoError);
+      
+      // Reactivar el botón de subir video
+      try {
+        const row = new ActionRowBuilder().addComponents(
+          message.components[0].components.map(button => {
+            const newButton = ButtonBuilder.from(button);
+            if (button.data.custom_id?.startsWith('upload_video_')) {
+              newButton.setDisabled(false);
+            }
+            return newButton;
+          })
+        );
+        await message.edit({ components: [row] });
+      } catch (editError) {
+        console.error("Error al reactivar botón:", editError);
+      }
+
+      await interaction.followUp({
+        content: "Hubo un error al procesar el video. Por favor, inténtalo de nuevo.",
+        ephemeral: true,
+      });
+      return;
+    }
+  } catch (error) {
+    console.error("Error al manejar interacción:", error);
+
+    // Reactivar el botón de subir video solo si el mensaje original existe
+    try {
+      if (message?.components?.[0]) {
+        const row = new ActionRowBuilder().addComponents(
+          message.components[0].components.map(button => {
+            const newButton = ButtonBuilder.from(button);
+            if (button.data.custom_id?.startsWith('upload_video_')) {
+              newButton.setDisabled(false);
+            }
+            return newButton;
+          })
+        );
+        await message.edit({ components: [row] });
+      }
+    } catch (editError) {
+      console.error("Error al reactivar botón:", editError);
     }
 
-    // Eliminar el mensaje con el video
-    await videoMessage.delete();
-
-    // Mostrar mensaje de éxito con la duración
-    await interaction.followUp({
-      content: `¡Video subido correctamente! Has completado la tarea en ${duration.hours}h ${duration.minutes}m ${duration.seconds}s.`,
-      flags: [1 << 6],
-    });
-  } catch (error) {
-    console.error("Error detallado:", error);
-    // Reactivar el botón de subir video
-    const row = ActionRowBuilder.from(message.components[0]);
-    const uploadButton = row.components.find(
-      (c) => c.data.custom_id === "upload_video"
-    );
-    uploadButton.setDisabled(false);
-    await message.edit({ components: [row] });
-
     // Verificar si es una colección vacía (timeout)
-    if (error instanceof Map && error.size === 0) {
+    if (error.name === "Collection" && error.size === 0) {
       await interaction.followUp({
         content:
           'Se acabó el tiempo para subir el video. Puedes intentarlo nuevamente volviendo a pulsar en "Subir video".',
-        flags: [1 << 6],
+        ephemeral: true,
       });
     } else {
       await interaction.followUp({
         content:
           "Hubo un error al procesar el video. Por favor, intenta nuevamente.",
-        flags: [1 << 6],
+        ephemeral: true,
       });
     }
   }

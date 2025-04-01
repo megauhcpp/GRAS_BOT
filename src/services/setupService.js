@@ -10,9 +10,8 @@ const { CATEGORY_ROLES } = require("../config/constants");
 // Función para configurar un canal inicial
 async function setupStarterChannel(channel) {
   try {
-    // Obtener los últimos 100 mensajes del canal
-    const messages = await channel.messages.fetch({ limit: 100 });
-
+    const messages = await channel.messages.fetch({ limit: 10 });
+    
     // Buscar si ya existe un mensaje con el botón
     const existingMessage = messages.find(
       (msg) =>
@@ -43,12 +42,12 @@ async function setupStarterChannel(channel) {
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId("create_channel")
-        .setLabel("Crear Canal")
+        .setLabel("Crear Canal Personal")
         .setStyle(ButtonStyle.Primary)
     );
 
     await channel.send({
-      content: "Haz clic para crear un canal de asignación de tareas",
+      content: "¡Bienvenido al canal de inicio! Para comenzar, crea tu canal personal haciendo clic en el botón de abajo. Una vez creado, podrás recibir y gestionar tus tareas.",
       components: [row],
     });
   } catch (error) {
@@ -58,36 +57,104 @@ async function setupStarterChannel(channel) {
 
 // Función para configurar el canal de asignación de tareas
 async function setupAssignmentChannel(channel) {
-  console.log("Iniciando configuración del canal de asignación...");
   try {
     const messages = await channel.messages.fetch({ limit: 10 });
-    console.log(`Encontrados ${messages.size} mensajes en el canal`);
-
-    const hasAssignmentMessage = messages.some((msg) =>
-      msg.author.bot && msg.components.length > 0
+    
+    // Buscar si ya existe un mensaje con el menú
+    const existingMessage = messages.find(
+      (msg) =>
+        msg.author.id === channel.client.user.id &&
+        msg.components.length > 0 &&
+        msg.components[0].components[0]?.data?.custom_id === "select_user_task"
     );
-    console.log(`¿Existe mensaje con menú? ${hasAssignmentMessage ? "Sí" : "No"}`);
 
-    if (!hasAssignmentMessage) {
-      const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId("create_channel")
-          .setLabel("Crear Canal")
-          .setStyle(ButtonStyle.Primary)
+    if (existingMessage) {
+      // Si ya existe el mensaje, no hacer nada
+      // Eliminar otros mensajes del bot si existen
+      const otherBotMessages = messages.filter(
+        (msg) =>
+          msg.author.id === channel.client.user.id &&
+          msg.id !== existingMessage.id
       );
-
-      const message = await channel.send({
-        content: "¡Bienvenido! Haz clic en el botón para crear tu canal de tareas.",
-        components: [row],
-      });
-
-      return message;
+      if (otherBotMessages.size > 0) {
+        await channel.bulkDelete(otherBotMessages);
+      }
+      return;
     }
 
-    return null;
+    // Si no existe el mensaje, eliminar todos los mensajes antiguos y crear uno nuevo
+    if (messages.size > 0) {
+      await channel.bulkDelete(messages);
+    }
+
+    // Obtener el rol de la categoría
+    const categoryId = channel.parent.id;
+    const categoryRole = Object.entries(CATEGORY_ROLES).find(
+      ([_, data]) => data.categoryId === categoryId
+    );
+    
+    if (!categoryRole) {
+      console.error("No se encontró el rol para la categoría", categoryId);
+      return;
+    }
+
+    const roleId = categoryRole[1].roleId;
+
+    // Obtener miembros con el rol de la categoría
+    const members = await channel.guild.members.fetch();
+    const filteredMembers = members.filter(
+      (member) => !member.user.bot && member.roles.cache.has(roleId)
+    );
+
+    // Crear el select menu
+    const userSelect = new StringSelectMenuBuilder()
+      .setCustomId("select_user_task")
+      .setPlaceholder("Selecciona un usuario")
+      .setMaxValues(1);
+
+    // Si hay usuarios, añadirlos como opciones
+    if (filteredMembers.size > 0) {
+      userSelect.addOptions(
+        Array.from(filteredMembers.values()).map((member) =>
+          new StringSelectMenuOptionBuilder()
+            .setLabel(member.user.username)
+            .setDescription(`ID: ${member.user.id}`)
+            .setValue(member.user.id)
+        )
+      );
+    } else {
+      // Si no hay usuarios, añadir una opción deshabilitada
+      userSelect.addOptions([
+        new StringSelectMenuOptionBuilder()
+          .setLabel("No hay usuarios disponibles")
+          .setDescription("No hay usuarios con el rol necesario en esta categoría")
+          .setValue("no_users")
+          .setDefault(true),
+      ]);
+    }
+
+    const row1 = new ActionRowBuilder().addComponents(userSelect);
+
+    const row2 = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId("assign_task")
+        .setLabel("Asignar Nueva Tarea")
+        .setStyle(ButtonStyle.Success)
+        .setDisabled(filteredMembers.size === 0)
+    );
+
+    await channel.send({
+      content: "Este es el canal de asignación de tareas. Aquí podrás:\n\n" +
+               "• Seleccionar un usuario de la lista\n" +
+               "• Asignar nuevas tareas al usuario seleccionado\n" +
+               "• Hacer seguimiento del progreso\n\n" +
+               "Para asignar una tarea:\n" +
+               "1. Selecciona un usuario de la lista\n" +
+               "2. Haz clic en 'Asignar Nueva Tarea'",
+      components: [row1, row2],
+    });
   } catch (error) {
-    console.error("Error en setupAssignmentChannel:", error);
-    throw error;
+    console.error(`Error al configurar el canal de asignación ${channel.name}:`, error);
   }
 }
 
@@ -116,8 +183,65 @@ async function updateAssignmentMessage(message) {
   }
 }
 
+// Función para configurar el canal de registro de tareas
+async function setupRegistryChannel(channel) {
+  try {
+    const messages = await channel.messages.fetch({ limit: 10 });
+    
+    // Buscar si ya existe un mensaje de bienvenida
+    const existingMessage = messages.find(
+      (msg) =>
+        msg.author.id === channel.client.user.id &&
+        msg.content.includes("registro de tareas")
+    );
+
+    if (existingMessage) {
+      return;
+    }
+
+    await channel.send({
+      content: "Este es el canal de registro de tareas. Aquí encontrarás:\n\n" +
+               "• Historial de tareas completadas\n" +
+               "• Tiempo dedicado a cada tarea\n" +
+               "• Registro de actividades\n\n" +
+               "Los registros se actualizarán automáticamente cuando se completen las tareas.",
+    });
+  } catch (error) {
+    console.error(`Error al configurar el canal de registro ${channel.name}:`, error);
+  }
+}
+
+// Función para configurar el canal de videos de tareas
+async function setupVideosChannel(channel) {
+  try {
+    const messages = await channel.messages.fetch({ limit: 10 });
+    
+    // Buscar si ya existe un mensaje de bienvenida
+    const existingMessage = messages.find(
+      (msg) =>
+        msg.author.id === channel.client.user.id &&
+        msg.content.includes("videos de tareas")
+    );
+
+    if (existingMessage) {
+      return;
+    }
+
+    await channel.send({
+      content: "Este es el canal de videos de tareas. Aquí podrás:\n\n" +
+               "• Ver el historial de videos subidos\n" +
+               "• Acceder a las grabaciones de las tareas\n\n" +
+               "Los videos se organizarán automáticamente por fecha y tarea.",
+    });
+  } catch (error) {
+    console.error(`Error al configurar el canal de videos ${channel.name}:`, error);
+  }
+}
+
 module.exports = {
   setupStarterChannel,
   setupAssignmentChannel,
+  setupRegistryChannel,
+  setupVideosChannel,
   updateAssignmentMessage,
 };

@@ -14,6 +14,8 @@ const {
 const {
   updateStarterChannelVisibility,
   assignRandomStarterChannel,
+  updateUserSelectMenu,
+  restoreUserPermissions,
 } = require("./src/services/channelService");
 const {
   handleCreateChannelButton,
@@ -156,6 +158,54 @@ client.once("ready", async () => {
   }
 });
 
+// Evento para detectar cambios en roles
+client.on("guildMemberUpdate", async (oldMember, newMember) => {
+  try {
+    // Verificar si hubo cambios en roles de categoría
+    let roleChanged = false;
+    const categoryRoleIds = Object.values(CATEGORY_ROLES).map(data => data.roleId);
+    const categoryRoleIdsSet = new Set(categoryRoleIds);
+
+    // Verificar roles removidos
+    for (const role of oldMember.roles.cache.values()) {
+      if (categoryRoleIdsSet.has(role.id) && !newMember.roles.cache.has(role.id)) {
+        roleChanged = true;
+        break;
+      }
+    }
+
+    // Verificar roles añadidos
+    if (!roleChanged) {
+      for (const role of newMember.roles.cache.values()) {
+        if (categoryRoleIdsSet.has(role.id) && !oldMember.roles.cache.has(role.id)) {
+          roleChanged = true;
+          break;
+        }
+      }
+    }
+
+    // Si hubo cambios en roles de categoría
+    if (roleChanged) {
+      console.log(`Roles de categoría cambiados para ${newMember.user.tag}`);
+
+      // Actualizar select menus en todos los canales de asignación
+      for (const [locationName, data] of Object.entries(CATEGORY_ROLES)) {
+        const category = newMember.guild.channels.cache.get(data.categoryId);
+        if (category) {
+          const assignmentChannel = category.children.cache.find(
+            channel => channel.name === "asignacion-tareas"
+          );
+          if (assignmentChannel) {
+            await updateUserSelectMenu(assignmentChannel);
+          }
+        }
+      }
+    }
+  } catch (error) {
+    console.error('Error manejando actualización de miembro:', error);
+  }
+});
+
 // Evento cuando un nuevo miembro se une al servidor
 client.on("guildMemberAdd", async (member) => {
   if (!member.user.bot) {
@@ -163,26 +213,23 @@ client.on("guildMemberAdd", async (member) => {
   }
 });
 
-// Evento cuando se elimina un canal
+// Evento para detectar cuando se elimina un canal
 client.on("channelDelete", async (channel) => {
   try {
-    // Verificar si el canal eliminado es un canal de tareas de usuario
-    const categoryName = channel.parent?.name;
-    if (!categoryName || !LOCATIONS.includes(categoryName)) return;
+    // Solo nos interesa si el canal está en una categoría
+    if (!channel.parent) return;
 
     // Extraer el ID del usuario del nombre del canal
     const match = channel.name.match(/tareas-.*-(\d+)$/);
     if (!match) return;
 
     const userId = match[1];
-    console.log(
-      `Canal eliminado: ${channel.name}, actualizando visibilidad para usuario ${userId}`
-    );
+    console.log(`Canal eliminado para usuario ${userId} en categoría ${channel.parent.name}`);
 
-    // Actualizar la visibilidad del starter channel para este usuario
-    await updateStarterChannelVisibility(channel.guild, userId);
+    // Restaurar permisos del usuario
+    await restoreUserPermissions(channel.guild, userId, channel.parent.id);
   } catch (error) {
-    console.error("Error al manejar eliminación de canal:", error);
+    console.error('Error manejando eliminación de canal:', error);
   }
 });
 
@@ -252,7 +299,7 @@ client.on("interactionCreate", async (interaction) => {
         await handleCreateChannelButton(interaction);
       } else if (interaction.customId.startsWith("start_task_")) {
         await handleStartTaskButton(interaction);
-      } else if (interaction.customId === "upload_video") {
+      } else if (interaction.customId.startsWith("upload_video_")) {
         await handleUploadVideoButton(interaction);
       } else if (interaction.customId.startsWith("assign_task_")) {
         await handleAssignTaskButton(interaction);
@@ -280,7 +327,7 @@ client.on("interactionCreate", async (interaction) => {
       if (!interaction.replied && !interaction.deferred) {
         await interaction.reply({
           content: "Hubo un error al procesar tu interacción.",
-          flags: [1 << 6],
+          ephemeral: true
         });
       }
     } catch (replyError) {

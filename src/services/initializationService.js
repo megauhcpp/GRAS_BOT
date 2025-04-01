@@ -1,6 +1,10 @@
 const { ChannelType, PermissionFlagsBits } = require("discord.js");
 const { REQUIRED_CHANNELS, CATEGORY_ROLES } = require("../config/constants");
-const { setupAssignmentChannel } = require("./setupService");
+const { 
+  setupAssignmentChannel, 
+  setupRegistryChannel, 
+  setupVideosChannel 
+} = require("./setupService");
 
 async function initializeRequiredChannels(guild) {
   console.log(`Iniciando verificación de canales requeridos en el servidor ${guild.name}`);
@@ -21,23 +25,21 @@ async function initializeRequiredChannels(guild) {
 
       console.log(`Verificando canales en categoría ${location}`);
 
-      // Configuración base de permisos para todos los canales
-      const basePermissions = [
+      // Configuración base de permisos para el starter channel
+      const starterPermissions = [
         {
           id: guild.roles.everyone.id,
-          deny: [PermissionFlagsBits.ViewChannel], // Denegar vista a todos por defecto
+          deny: [PermissionFlagsBits.ViewChannel],
         },
         {
           id: roleId,
           allow: [
             PermissionFlagsBits.ViewChannel,
             PermissionFlagsBits.ReadMessageHistory,
-            PermissionFlagsBits.SendMessages,
-            PermissionFlagsBits.AttachFiles,
           ],
         },
         {
-          id: guild.client.user.id, // Dar permisos al bot
+          id: guild.client.user.id,
           allow: [
             PermissionFlagsBits.ViewChannel,
             PermissionFlagsBits.SendMessages,
@@ -46,6 +48,45 @@ async function initializeRequiredChannels(guild) {
           ],
         },
       ];
+
+      // Configuración de permisos para los otros canales (inicialmente ocultos para todos excepto el bot)
+      const restrictedPermissions = [
+        {
+          id: guild.roles.everyone.id,
+          deny: [PermissionFlagsBits.ViewChannel],
+        },
+        {
+          id: roleId,
+          deny: [PermissionFlagsBits.ViewChannel], // Denegar vista al rol de la categoría
+        },
+        {
+          id: guild.client.user.id,
+          allow: [
+            PermissionFlagsBits.ViewChannel,
+            PermissionFlagsBits.SendMessages,
+            PermissionFlagsBits.ManageChannels,
+            PermissionFlagsBits.ManageMessages,
+          ],
+        },
+      ];
+
+      // Verificar y crear canal starter
+      let starterChannel = category.children.cache.find(
+        channel => channel.name === REQUIRED_CHANNELS.STARTER
+      );
+
+      if (!starterChannel) {
+        console.log(`Creando canal starter en ${location}...`);
+        starterChannel = await guild.channels.create({
+          name: REQUIRED_CHANNELS.STARTER,
+          type: ChannelType.GuildText,
+          parent: category.id,
+          permissionOverwrites: starterPermissions,
+        });
+        await setupStarterChannel(starterChannel);
+      } else {
+        await starterChannel.permissionOverwrites.set(starterPermissions);
+      }
 
       // Verificar y crear canal de asignación de tareas
       let assignmentChannel = category.children.cache.find(
@@ -58,12 +99,12 @@ async function initializeRequiredChannels(guild) {
           name: REQUIRED_CHANNELS.TASK_ASSIGNMENT,
           type: ChannelType.GuildText,
           parent: category.id,
-          permissionOverwrites: basePermissions,
+          permissionOverwrites: restrictedPermissions,
         });
         await setupAssignmentChannel(assignmentChannel);
       } else {
-        // Actualizar permisos de canal existente
-        await assignmentChannel.permissionOverwrites.set(basePermissions);
+        await assignmentChannel.permissionOverwrites.set(restrictedPermissions);
+        await setupAssignmentChannel(assignmentChannel);
       }
 
       // Verificar y crear canal de registro de tareas
@@ -77,10 +118,12 @@ async function initializeRequiredChannels(guild) {
           name: REQUIRED_CHANNELS.TASK_REGISTRY,
           type: ChannelType.GuildText,
           parent: category.id,
-          permissionOverwrites: basePermissions,
+          permissionOverwrites: restrictedPermissions,
         });
+        await setupRegistryChannel(registryChannel);
       } else {
-        await registryChannel.permissionOverwrites.set(basePermissions);
+        await registryChannel.permissionOverwrites.set(restrictedPermissions);
+        await setupRegistryChannel(registryChannel);
       }
 
       // Verificar y crear canal de videos de tareas
@@ -94,10 +137,12 @@ async function initializeRequiredChannels(guild) {
           name: REQUIRED_CHANNELS.TASK_VIDEOS,
           type: ChannelType.GuildText,
           parent: category.id,
-          permissionOverwrites: basePermissions,
+          permissionOverwrites: restrictedPermissions,
         });
+        await setupVideosChannel(videosChannel);
       } else {
-        await videosChannel.permissionOverwrites.set(basePermissions);
+        await videosChannel.permissionOverwrites.set(restrictedPermissions);
+        await setupVideosChannel(videosChannel);
       }
     }
 

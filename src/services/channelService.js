@@ -1,8 +1,17 @@
-const { ChannelType, PermissionsBitField, PermissionFlagsBits } = require("discord.js");
+const {
+  ChannelType,
+  PermissionsBitField,
+  PermissionFlagsBits,
+  ActionRowBuilder,
+  StringSelectMenuBuilder,
+  StringSelectMenuOptionBuilder,
+  ButtonBuilder,
+} = require("discord.js");
 const {
   LOCATIONS,
   STARTER_CHANNELS,
   CATEGORY_ROLES,
+  REQUIRED_CHANNELS,
 } = require("../config/constants");
 
 // Función para obtener el nombre del canal según la categoría
@@ -100,10 +109,10 @@ async function updateStarterChannelVisibility(guild, userId) {
     // Iterar sobre las categorías y sus roles
     for (const [location, { roleId }] of Object.entries(CATEGORY_ROLES)) {
       const hasRole = userRoles.has(roleId);
-      
+
       // Buscar el canal starter correspondiente
       const starterChannel = guild.channels.cache.find(
-        channel => channel.name.toLowerCase() === location.toLowerCase()
+        (channel) => channel.name.toLowerCase() === location.toLowerCase()
       );
 
       if (starterChannel) {
@@ -113,7 +122,10 @@ async function updateStarterChannelVisibility(guild, userId) {
             ViewChannel: !hasRole, // Ocultar si tiene el rol, mostrar si no lo tiene
           });
         } catch (error) {
-          console.error(`Error al configurar el canal ${starterChannel.name}:`, error);
+          console.error(
+            `Error al configurar el canal ${starterChannel.name}:`,
+            error
+          );
         }
       }
     }
@@ -122,9 +134,176 @@ async function updateStarterChannelVisibility(guild, userId) {
   }
 }
 
+// Función para actualizar los permisos cuando se crea un canal específico
+async function updateUserChannelPermissions(guild, userId, categoryId) {
+  try {
+    const member = await guild.members.fetch(userId);
+    const category = guild.channels.cache.get(categoryId);
+
+    if (!category) {
+      console.error(`No se encontró la categoría ${categoryId}`);
+      return;
+    }
+
+    // 1. Ocultar el canal starter
+    const starterChannel = category.children.cache.find(
+      (channel) => channel.name === REQUIRED_CHANNELS.STARTER
+    );
+
+    if (starterChannel) {
+      await starterChannel.permissionOverwrites.edit(member, {
+        ViewChannel: false,
+      });
+    }
+
+    // 2. Ocultar los canales de tareas por defecto
+    const channelsToHide = [
+      REQUIRED_CHANNELS.TASK_ASSIGNMENT,
+      REQUIRED_CHANNELS.TASK_REGISTRY,
+      REQUIRED_CHANNELS.TASK_VIDEOS,
+    ];
+
+    for (const channelName of channelsToHide) {
+      const channel = category.children.cache.find(
+        (ch) => ch.name === channelName
+      );
+
+      if (channel) {
+        await channel.permissionOverwrites.edit(member, {
+          ViewChannel: false,
+        });
+      }
+    }
+  } catch (error) {
+    console.error("Error actualizando permisos de usuario:", error);
+  }
+}
+
+// Función para restaurar permisos cuando se elimina un canal específico
+async function restoreUserPermissions(guild, userId, categoryId) {
+  try {
+    const member = await guild.members.fetch(userId);
+    const category = guild.channels.cache.get(categoryId);
+
+    if (!category) {
+      console.error(`No se encontró la categoría ${categoryId}`);
+      return;
+    }
+
+    // 1. Mostrar el canal starter
+    const starterChannel = category.children.cache.find(
+      (channel) => channel.name === REQUIRED_CHANNELS.STARTER
+    );
+
+    if (starterChannel) {
+      await starterChannel.permissionOverwrites.edit(member, {
+        ViewChannel: true,
+        ReadMessageHistory: true,
+      });
+    }
+
+    // 2. Ocultar los canales de tareas
+    const channelsToHide = [
+      REQUIRED_CHANNELS.TASK_ASSIGNMENT,
+      REQUIRED_CHANNELS.TASK_REGISTRY,
+      REQUIRED_CHANNELS.TASK_VIDEOS,
+    ];
+
+    for (const channelName of channelsToHide) {
+      const channel = category.children.cache.find(
+        (ch) => ch.name === channelName
+      );
+
+      if (channel) {
+        await channel.permissionOverwrites.edit(member, {
+          ViewChannel: false,
+        });
+      }
+    }
+  } catch (error) {
+    console.error("Error restaurando permisos de usuario:", error);
+  }
+}
+
+// Función para actualizar el select menu de usuarios en un canal
+async function updateUserSelectMenu(channel) {
+  try {
+    const messages = await channel.messages.fetch({ limit: 10 });
+    const selectMessage = messages.find(
+      (msg) =>
+        msg.author.id === channel.client.user.id &&
+        msg.components.length > 0 &&
+        msg.components[0].components[0]?.data?.custom_id === "select_user_task"
+    );
+
+    if (!selectMessage) {
+      console.log("No se encontró mensaje con select menu para actualizar");
+      return;
+    }
+
+    // Obtener el rol de la categoría
+    const categoryId = channel.parent.id;
+    const categoryRole = Object.entries(CATEGORY_ROLES).find(
+      ([_, data]) => data.categoryId === categoryId
+    );
+
+    if (!categoryRole) {
+      console.error("No se encontró el rol para la categoría", categoryId);
+      return;
+    }
+
+    const roleId = categoryRole[1].roleId;
+
+    // Obtener miembros actualizados con el rol
+    const members = await channel.guild.members.fetch();
+    const filteredMembers = members.filter(
+      (member) => !member.user.bot && member.roles.cache.has(roleId)
+    );
+
+    // Crear el select menu actualizado
+    const row1 = new ActionRowBuilder().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId("select_user_task")
+        .setPlaceholder("Selecciona un usuario")
+        .setMaxValues(1)
+        .addOptions(
+          filteredMembers.size > 0
+            ? Array.from(filteredMembers.values()).map((member) =>
+                new StringSelectMenuOptionBuilder()
+                  .setLabel(member.user.username)
+                  .setDescription(`ID: ${member.user.id}`)
+                  .setValue(member.user.id)
+              )
+            : [
+                new StringSelectMenuOptionBuilder()
+                  .setLabel("No hay usuarios disponibles")
+                  .setDescription(
+                    "No hay usuarios con el rol necesario en esta categoría"
+                  )
+                  .setValue("no_users")
+                  .setDefault(true),
+              ]
+        )
+    );
+
+    const row2 = new ActionRowBuilder().addComponents(
+      ButtonBuilder.from(selectMessage.components[1].components[0]).setDisabled(
+        filteredMembers.size === 0
+      )
+    );
+
+    await selectMessage.edit({ components: [row1, row2] });
+  } catch (error) {
+    console.error("Error actualizando select menu:", error);
+  }
+}
+
 module.exports = {
   getChannelName,
   hasChannelInCategory,
   assignRandomStarterChannel,
   updateStarterChannelVisibility,
+  updateUserChannelPermissions,
+  restoreUserPermissions,
+  updateUserSelectMenu,
 };

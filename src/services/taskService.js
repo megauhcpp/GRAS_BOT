@@ -5,153 +5,149 @@ const {
   EmbedBuilder,
 } = require("discord.js");
 
-// Función para enviar mensajes de tarea a un canal
-async function sendTaskMessages(user, tasks, channel) {
+// Función para enviar mensajes iniciales al canal personal
+async function sendTaskMessages(channel) {
   try {
-    // Obtener el canal de registro
-    const registroChannel = channel.parent.children.cache.find(
-      (ch) => ch.name === "registro-tareas"
-    );
-
-    if (!registroChannel) {
-      console.error("No se encontró el canal de registro-tareas");
-      return;
-    }
-
-    for (const task of tasks) {
-      const embed = new EmbedBuilder()
-        .setColor(0x0099ff)
-        .setTitle("Nueva Tarea")
-        .setDescription(task)
-        .setTimestamp();
-
-      // Primero enviamos el mensaje para obtener su ID
-      const message = await channel.send({
-        content: `${user}`,
-        embeds: [embed],
-      });
-
-      // Luego creamos los botones con el ID del mensaje
-      const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId(`start_task_${message.id}`)
-          .setLabel("Registrar inicio")
-          .setStyle(ButtonStyle.Success),
-        new ButtonBuilder()
-          .setCustomId("upload_video")
-          .setLabel("Subir Video")
-          .setStyle(ButtonStyle.Primary)
-          .setDisabled(true)
+    // Enviar mensaje de bienvenida
+    const embed = new EmbedBuilder()
+      .setColor("#0099ff")
+      .setTitle("¡Bienvenido a tu canal personal!")
+      .setDescription(
+        "Este es tu canal personal para gestionar tus tareas. " +
+        "Aquí podrás ver las tareas que te sean asignadas y subir los videos correspondientes."
       );
 
-      // Actualizamos el mensaje con los botones
-      await message.edit({ components: [row] });
-    }
+    await channel.send({ embeds: [embed] });
+
+    // Enviar instrucciones
+    const instructions = [
+      "**¿Cómo funciona?**",
+      "",
+      "1. Cuando se te asigne una tarea, recibirás una notificación en este canal",
+      "2. Para cada tarea asignada, verás:",
+      "   • Descripción de la tarea",
+      "   • Botón para subir el video",
+      "3. Al completar una tarea:",
+      "   • Graba un video mostrando la tarea completada",
+      "   • Sube el video usando el botón correspondiente",
+      "   • El video se enviará automáticamente a un administrador",
+      "",
+      "¡Buena suerte con tus tareas! 🚀"
+    ].join("\n");
+
+    await channel.send(instructions);
   } catch (error) {
     console.error("Error al enviar mensajes de tarea:", error);
   }
 }
 
-// Función auxiliar para separar título y descripción
-function parseTaskContent(content) {
-  let title = content;
-  let description = "Sin descripción";
+// Función para enviar una tarea al canal del usuario
+async function sendTaskToUserChannel(channel, userId, task, description) {
+  try {
+    const embed = new EmbedBuilder()
+      .setColor("#0099ff")
+      .setTitle("📋 Nueva Tarea Asignada")
+      .addFields(
+        { name: "Tarea", value: task || "Sin título", inline: false },
+        { name: "Descripción", value: description || "Sin descripción", inline: false }
+      )
+      .setFooter({ text: "Utiliza los botones de abajo para gestionar la tarea" })
+      .setTimestamp();
 
-  if (content.includes("Descripción:")) {
-    const parts = content.split("Descripción:");
-    title = parts[0].trim();
-    description = parts[1].trim();
+    // Enviar el mensaje con el embed
+    const message = await channel.send({
+      content: `<@${userId}>, se te ha asignado una nueva tarea:`,
+      embeds: [embed],
+    });
+
+    // Crear los botones
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`start_task_${message.id}`)
+        .setLabel("Iniciar Tarea")
+        .setStyle(ButtonStyle.Success),
+      new ButtonBuilder()
+        .setCustomId(`upload_video_${message.id}`)
+        .setLabel("Subir Video")
+        .setStyle(ButtonStyle.Primary)
+        .setDisabled(true)
+    );
+
+    // Actualizar el mensaje con los botones
+    await message.edit({ components: [row] });
+  } catch (error) {
+    console.error("Error al enviar tarea al canal del usuario:", error);
+    throw error;
   }
-
-  return { title, description };
 }
 
-// Función para deshabilitar/habilitar botones de subida de video en un canal
+// Función para habilitar/deshabilitar botones de subida de video
 async function toggleUploadButtons(channel, userId, disable = true) {
   try {
-    // Buscar los últimos 100 mensajes en el canal
-    const messages = await channel.messages.fetch({ limit: 100 });
+    const messages = await channel.messages.fetch({ limit: 50 });
+    const userMessages = messages.filter(msg => 
+      msg.mentions.users.has(userId) && 
+      msg.components.length > 0
+    );
 
-    // Filtrar mensajes que tienen botones de subir video y son del usuario
-    for (const [_, message] of messages) {
-      if (message.components?.length > 0) {
-        const row = message.components[0];
-        const uploadButton = row.components.find((component) =>
-          component.customId?.startsWith("upload_video_")
+    for (const message of userMessages.values()) {
+      const row = message.components[0];
+      if (!row) continue;
+
+      const uploadButton = row.components.find(
+        component => component.data.custom_id?.startsWith('upload_video_')
+      );
+
+      if (uploadButton) {
+        const newRow = new ActionRowBuilder().addComponents(
+          row.components.map(button => {
+            const newButton = ButtonBuilder.from(button);
+            if (button.data.custom_id?.startsWith('upload_video_')) {
+              newButton.setDisabled(disable);
+            }
+            return newButton;
+          })
         );
 
-        if (uploadButton) {
-          const newRow = new ActionRowBuilder().addComponents(
-            ButtonBuilder.from(uploadButton).setDisabled(disable)
-          );
-
-          await message.edit({ components: [newRow] });
-        }
+        await message.edit({ components: [newRow] });
       }
     }
   } catch (error) {
-    console.error("Error al toggle botones de subida:", error);
+    console.error('Error al actualizar botones:', error);
   }
 }
 
-// Función para enviar video al canal de confirmación
-async function sendVideoConfirmation(
-  attachment,
-  interaction,
-  message,
-  duration
-) {
+// Función para enviar confirmación de video
+async function sendVideoConfirmation(attachment, message, duration, taskTitle, taskDescription) {
   try {
-    // Obtener la categoría del mensaje original
-    const category = message.channel.parent;
-    if (!category)
-      throw new Error("No se pudo determinar la categoría del mensaje");
-
-    // Buscar el canal de videos en la misma categoría
-    const videoChannel = category.children.cache.find(
-      (ch) => ch.name === "videos-tareas"
-    );
-
-    if (!videoChannel)
-      throw new Error("No se encontró el canal de videos en esta categoría");
-
-    const { hours, minutes, seconds } = duration;
-    const originalEmbed = message.embeds[0];
-
-    const videoEmbed = new EmbedBuilder()
-      .setColor(0x0099ff)
-      .setTitle("Video de Tarea Completada")
-      .setDescription(`**Tarea:** ${originalEmbed.description}`)
+    const durationString = `${duration.hours}h ${duration.minutes}m ${duration.seconds}s`;
+    const embed = new EmbedBuilder()
+      .setColor("#00ff00")
+      .setTitle("✅ Video Recibido")
       .addFields([
-        {
-          name: "Usuario",
-          value: `${interaction.user}`,
-          inline: true,
-        },
-        {
-          name: "Duración",
-          value: `${hours}h ${minutes}m ${seconds}s`,
-          inline: true,
-        },
-        {
-          name: "Tarea Original",
-          value: `[Ver tarea](${message.url})`,
-          inline: true,
-        },
+        { name: "Tarea", value: taskTitle, inline: false },
+        { name: "Descripción", value: taskDescription, inline: false },
+        { name: "Duración", value: durationString, inline: true },
+        { name: "Tamaño", value: `${Math.round(attachment.size / 1024 / 1024 * 100) / 100} MB`, inline: true }
       ])
+      .setDescription(`Video subido por ${message.author}`)
       .setTimestamp();
 
-    return await videoChannel.send({
-      embeds: [videoEmbed],
-      files: [
-        {
-          attachment: attachment.url,
-          name: `tarea-${interaction.user.username}-${Date.now()}.${
-            attachment.contentType.split("/")[1]
-          }`,
-        },
-      ],
-    });
+    // Enviar el video al canal de videos
+    const videosChannel = message.channel.parent.children.cache.find(
+      ch => ch.name === "videos-tareas"
+    );
+
+    if (videosChannel) {
+      await videosChannel.send({
+        content: `Video para la tarea "${taskTitle}"`,
+        embeds: [embed],
+        files: [attachment]
+      });
+    } else {
+      console.error("No se encontró el canal de videos");
+      throw new Error("No se encontró el canal de videos");
+    }
   } catch (error) {
     console.error("Error al enviar confirmación de video:", error);
     throw error;
@@ -160,7 +156,7 @@ async function sendVideoConfirmation(
 
 module.exports = {
   sendTaskMessages,
-  parseTaskContent,
+  sendTaskToUserChannel,
   toggleUploadButtons,
   sendVideoConfirmation,
 };
